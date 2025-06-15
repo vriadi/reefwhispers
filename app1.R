@@ -80,20 +80,26 @@ server <- function(input, output, session) {
   # ---- Network Graph ----
   output$net_plot <- renderVisNetwork({
     df <- filtered_data() %>%
-      count(sender_label, receiver_label, name = "weight")
+      filter(!is.na(sender_label), !is.na(receiver_label)) %>%
+      count(sender_label, receiver_label, name = "value")  # value used for edge weight
     
     if (nrow(df) == 0) return(NULL)
     
-    nodes <- unique(c(df$sender_label, df$receiver_label)) %>%
-      data.frame(id = ., label = .)
+    # Create node list with group for coloring
+    graph_nodes <- tibble(name = unique(c(df$sender_label, df$receiver_label))) %>%
+      mutate(id = name, label = name, group = name)  # group = name → each node colored uniquely
     
-    edges <- df %>%
+    # Rename edge columns for visNetwork
+    graph_edges <- df %>%
       rename(from = sender_label, to = receiver_label)
     
-    visNetwork(nodes, edges) %>%
+    visNetwork(nodes = graph_nodes, edges = graph_edges) %>%
       visEdges(arrows = "to") %>%
       visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
-      visLayout(randomSeed = 123)
+      visLayout(randomSeed = 123) %>%
+      visPhysics(stabilization = TRUE) %>%
+      visInteraction(navigationButtons = TRUE) %>%
+      visLegend()
   })
   
   # ---- Data Table ----

@@ -302,15 +302,19 @@ server <- function(input, output, session) {
       Focus = c("Execution Planning", "Escalation Response", "Surveillance & Legal Framing",
                 "Disruption & Realignment", "Administrative Closure")
     )
-    ggplot(df_focus, aes(x = Date, y = 1)) +
-      geom_line(linewidth = 1.5, color = "steelblue") +
-      geom_point(size = 6, color = "steelblue") +
-      geom_text(aes(label = Focus), vjust = -1.5, angle = 30, size = 3.5, hjust = 0) +
-      ylim(0.95, 1.1) +
+    ggplot(df_focus, aes(x = Date, y = 1, text = Focus)) +
+      geom_line(linewidth = 1.2, color = "steelblue") +
+      geom_point(size = 4, color = "steelblue") +
+      ylim(0.95, 1.05) +
       theme_minimal() +
-      theme(axis.title = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(),
-            panel.grid = element_blank(), plot.title = element_text(face = "bold", size = 14)) +
-      ggtitle("Timeline of Nadia-Linked Operational Focus (Oct 8–12, 2040)")
+      theme(
+        axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        panel.grid = element_blank()
+      ) +
+      geom_text(aes(label = Focus), vjust = -1.5, angle = 20, size = 3.5) +
+      labs(title = "Timeline of Nadia-Linked Operational Focus (Oct 8–12, 2040)")
   })
   
   # Nadia Event Classification

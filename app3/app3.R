@@ -8,6 +8,7 @@ library(janitor)
 library(tidytext)
 library(stopwords)
 library(visNetwork)
+library(plotly)
 
 # Load your data
 messages <- read_csv("/Users/summernguyen/Documents/summernguyenn/reefwhispers/data/communications_full.csv")
@@ -21,55 +22,30 @@ ui <- navbarPage(
   tabPanel("Overview",
            sidebarLayout(
              sidebarPanel(
-               h5("Select Week(s)"),
-               checkboxGroupInput("weeks", NULL, choices = c("Week 1", "Week 2"), selected = c("Week 1", "Week 2")),
-               
-               h5("Select Date Range"),
-               dateRangeInput("date_range", NULL, start = "2040-10-01", end = "2040-10-14"),
-               
-               h5("Hour of Day"),
-               sliderInput("hour_range", NULL, min = 0, max = 23, value = c(8, 18)),
-               
-               textInput("sender_type", "Sender Entity Type", ""),
+               checkboxGroupInput("weeks", "Select Week(s)", choices = c("Week 1", "Week 2"), selected = c("Week 1", "Week 2")),
+               dateRangeInput("date_range", "Select Date Range", start = "2040-10-01", end = "2040-10-14"),
+               sliderInput("hour_range", "Hour of Day", min = 0, max = 23, value = c(8, 18)),
                textInput("sender", "Sender", ""),
-               textInput("receiver_type", "Receiver Entity Type", ""),
                textInput("receiver", "Receiver", ""),
-               
                actionButton("update", "Update View")
              ),
-             
              mainPanel(
                tabsetPanel(
                  tabPanel("Temporal Pattern",
                           fluidRow(
-                            column(6, plotOutput("nadiaPie")),
-                            column(6, div(style = "background-color:#eadbf7; padding: 15px;",
-                                          h4("🕵️ Investigation Note"),
-                                          tags$ul(
-                                            tags$li("Nadia Conti received more than twice the number of messages she sent."),
-                                            tags$li("This suggests she was a central point of contact."),
-                                            tags$li("This may imply influence, authority, or involvement in sensitive operations.")
-                                          ),
-                                          tags$ul(
-                                            tags$li(HTML("12 messages mention Nadia but are neither sent nor received by her. This means she is a <b>subject of conversation</b> even when not directly involved."))
-                                          ),
-                                          p("Continue examining timing and content of these indirect mentions.")
-                            ))
+                            column(6, plotlyOutput("nadiaPie")),
+                            column(6, uiOutput("noteBox"))
                           ),
                           fluidRow(
-                            column(6, plotOutput("barHourDay")),
-                            column(6, plotOutput("mentionPattern"))
+                            column(6, plotlyOutput("barHourDay")),
+                            column(6, plotlyOutput("mentionPattern"))
                           )
                  ),
-                 
                  tabPanel("Direct Relationship Network",
-                          h4("Nadia’s Relationship Network Graph"),
                           selectInput("selected_node", "Select by ID", choices = NULL),
                           visNetworkOutput("directNet", height = "600px")
                  ),
-                 
                  tabPanel("Relationship Network",
-                          h4("Nadia’s entire structure of interactions"),
                           visNetworkOutput("relationshipNet", height = "700px")
                  )
                )
@@ -118,59 +94,55 @@ server <- function(input, output, session) {
       mutate(time = ymd_hms(timestamp)) %>%
       filter(between(hour(time), input$hour_range[1], input$hour_range[2])) %>%
       filter(date(time) >= input$date_range[1] & date(time) <= input$date_range[2])
-    
     if (input$sender != "") df <- df %>% filter(sender == input$sender)
     if (input$receiver != "") df <- df %>% filter(receiver == input$receiver)
-    
     df
   })
   
-  output$nadiaPie <- renderPlot({
-    nadia_msgs <- filtered_data() %>%
-      filter(sender == "Nadia Conti" | receiver == "Nadia Conti")
-    
+  output$nadiaPie <- renderPlotly({
+    nadia_msgs <- filtered_data() %>% filter(sender == "Nadia Conti" | receiver == "Nadia Conti")
     nadia_counts <- nadia_msgs %>%
       summarise(Sent = sum(sender == "Nadia Conti"), Received = sum(receiver == "Nadia Conti")) %>%
       pivot_longer(everything(), names_to = "Type", values_to = "Count") %>%
-      mutate(Percent = Count / sum(Count),
-             Label = paste0(round(Percent * 100), "%\n(", Count, " msgs)"))
-    
-    ggplot(nadia_counts, aes(x = "", y = Count, fill = Type)) +
-      geom_col(width = 1, color = "black") +
-      coord_polar(theta = "y") +
-      geom_text(aes(label = Label), position = position_stack(vjust = 0.5)) +
-      labs(title = "Nadia Conti's Messages") +
-      scale_fill_manual(values = c("Sent" = "yellow", "Received" = "green")) +
-      theme_void()
+      mutate(Percent = Count / sum(Count), Label = paste0(round(Percent * 100), "%\n(", Count, " msgs)"))
+    plot_ly(nadia_counts, labels = ~Type, values = ~Count, type = 'pie', textinfo = 'label+percent',
+            marker = list(colors = c("yellow", "green"))) %>%
+      layout(title = "Nadia Conti's Messages")
   })
   
-  output$barHourDay <- renderPlot({
-    nadia_msgs <- filtered_data() %>%
-      filter(sender == "Nadia Conti" | receiver == "Nadia Conti") %>%
-      mutate(hour = hour(ymd_hms(timestamp)), day = as.Date(timestamp))
-    
-    nadia_msgs %>%
-      count(day, hour) %>%
-      ggplot(aes(x = hour, y = n, fill = factor(day))) +
-      geom_col(position = "dodge") +
-      labs(title = "Hourly Activity", x = "Hour", y = "Messages") +
+  output$noteBox <- renderUI({
+    HTML(
+      '<div style="background-color:#eadbf7; padding:15px;">
+      <h4>\ud83d\udd75\ufe0f Investigation Note</h4>
+      <ul>
+        <li>Nadia Conti received more than twice the number of messages she sent.</li>
+        <li>This suggests she was a central point of contact.</li>
+        <li>This may imply influence, authority, or involvement in sensitive operations.</li>
+        <li><b>12 messages</b> mention Nadia but are neither sent nor received by her. She is a <b>subject of conversation</b>.</li>
+      </ul>
+      <p>Continue examining timing and content of these indirect mentions.</p>
+    </div>'
+    )
+  })
+  
+  output$barHourDay <- renderPlotly({
+    nadia_msgs <- filtered_data() %>% filter(sender == "Nadia Conti" | receiver == "Nadia Conti") %>%
+      mutate(hour = hour(ymd_hms(timestamp)), day = as.Date(timestamp)) %>% count(day, hour)
+    gg <- ggplot(nadia_msgs, aes(x = hour, y = n, fill = factor(day))) +
+      geom_col(position = "dodge") + labs(title = "Hourly Activity", x = "Hour", y = "Messages") +
       theme_minimal()
+    ggplotly(gg)
   })
   
-  output$mentionPattern <- renderPlot({
-    mentions_nadia <- filtered_data() %>%
-      filter(str_detect(content, "Nadia", negate = FALSE)) %>%
-      mutate(hour = hour(ymd_hms(timestamp)), day = as.Date(timestamp))
-    
-    mentions_nadia %>%
-      count(day, hour) %>%
-      ggplot(aes(x = hour, y = n, fill = factor(day))) +
-      geom_col(position = "dodge") +
-      labs(title = "Mentions of Nadia by Hour", x = "Hour", y = "Mentions") +
+  output$mentionPattern <- renderPlotly({
+    mentions <- filtered_data() %>% filter(str_detect(content, "Nadia")) %>%
+      mutate(hour = hour(ymd_hms(timestamp)), day = as.Date(timestamp)) %>% count(day, hour)
+    gg <- ggplot(mentions, aes(x = hour, y = n, fill = factor(day))) +
+      geom_col(position = "dodge") + labs(title = "Mentions of Nadia by Hour", x = "Hour", y = "Mentions") +
       theme_minimal()
+    ggplotly(gg)
   })
   
-  # Update Direct Network Selection
   observe({
     node_choices <- sort(unique(c(messages$sender_label, messages$receiver_label)))
     updateSelectInput(session, "selected_node", choices = node_choices)
@@ -178,16 +150,12 @@ server <- function(input, output, session) {
   
   output$directNet <- renderVisNetwork({
     nadia_msgs <- filtered_data()
-    edges <- nadia_msgs %>%
-      count(sender_label, receiver_label) %>%
+    edges <- nadia_msgs %>% count(sender_label, receiver_label) %>%
       filter(!is.na(sender_label), !is.na(receiver_label)) %>%
       rename(from = sender_label, to = receiver_label, value = n)
-    
     nodes <- tibble(name = unique(c(edges$from, edges$to))) %>%
       mutate(id = name, label = name, group = ifelse(name == "Nadia Conti", "Nadia", "Other"))
-    
-    visNetwork(nodes, edges) %>%
-      visEdges(arrows = "to") %>%
+    visNetwork(nodes, edges) %>% visEdges(arrows = "to") %>%
       visOptions(highlightNearest = TRUE, nodesIdSelection = list(enabled = TRUE, selected = input$selected_node)) %>%
       visLegend()
   })
@@ -196,20 +164,14 @@ server <- function(input, output, session) {
     df2 <- df %>%
       mutate(rel_label = str_remove(relationship, "^Relationship_"),
              rel_label = str_remove(rel_label, "_\\d+$"))
-    
     sender_nodes <- df2 %>% distinct(id = sender, label = sender, group = sender_type)
     receiver_nodes <- df2 %>% distinct(id = receiver, label = receiver, group = receiver_type)
     rel_nodes <- df2 %>% distinct(id = relationship, label = rel_label, group = "Relationship")
-    
     nodes <- bind_rows(sender_nodes, receiver_nodes, rel_nodes) %>% distinct(id, .keep_all = TRUE)
-    edges <- df2 %>%
-      transmute(from = sender, to = relationship) %>%
+    edges <- df2 %>% transmute(from = sender, to = relationship) %>%
       bind_rows(df2 %>% transmute(from = relationship, to = receiver))
-    
-    visNetwork(nodes, edges) %>%
-      visEdges(arrows = "to") %>%
-      visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
-      visLegend()
+    visNetwork(nodes, edges) %>% visEdges(arrows = "to") %>%
+      visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>% visLegend()
   })
   
   # --- Keyword Insights ---

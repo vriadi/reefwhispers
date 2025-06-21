@@ -42,7 +42,7 @@ ui <- navbarPage(
                           )
                  ),
                  tabPanel("Direct Relationship Network",
-                          selectInput("selected_node", "Select by ID", choices = NULL),
+                          selectInput("selected_node", "Select by ID", choices = NULL, selected = "Nadia Conti"),
                           visNetworkOutput("directNet", height = "600px")
                  ),
                  tabPanel("Relationship Network",
@@ -64,6 +64,9 @@ ui <- navbarPage(
                                       "October 12th" = "2040-10-12"),
                           inline = TRUE
              ),
+             selectInput("keyword_category", "Filter by Category",
+                         choices = c("All", "Person", "Location", "Construction", "Object", "Time", "Action", "Other"),
+                         selected = "All"),
              plotOutput("keywordPlot", height = "600px")
            )
   ),
@@ -148,33 +151,121 @@ server <- function(input, output, session) {
     updateSelectInput(session, "selected_node", choices = node_choices)
   })
   
+# Enhancements included:
+# - Tooltips on nodes and edges
+# - Node sizing by message volume
+# - Edge color mapping by strength
+# - Node drag and layout freeze option
+# - Better selection filtering in direct network
+
+  # Enhancements included:
+  # - Tooltips on nodes and edges
+  # - Node sizing by message volume
+  # - Edge color mapping by strength
+  # - Node drag and layout freeze option
+  # - Better selection filtering in direct network
+  
   output$directNet <- renderVisNetwork({
     nadia_msgs <- filtered_data()
-    edges <- nadia_msgs %>% count(sender_label, receiver_label) %>%
+    edges <- nadia_msgs %>% 
+      count(sender_label, receiver_label) %>%
       filter(!is.na(sender_label), !is.na(receiver_label)) %>%
       rename(from = sender_label, to = receiver_label, value = n)
+    
+    node_info <- nadia_msgs %>%
+      pivot_longer(cols = c(sender_label, receiver_label), names_to = "role", values_to = "name") %>%
+      count(name, name = "message_count")
+    
     nodes <- tibble(name = unique(c(edges$from, edges$to))) %>%
-      mutate(id = name, label = name, group = ifelse(name == "Nadia Conti", "Nadia", "Other"))
-    visNetwork(nodes, edges) %>% visEdges(arrows = "to") %>%
-      visOptions(highlightNearest = TRUE, nodesIdSelection = list(enabled = TRUE, selected = input$selected_node)) %>%
+      left_join(node_info, by = "name") %>%
+      mutate(id = name, 
+             label = name, 
+             size = pmin(60, 10 + message_count),
+             group = ifelse(name == "Nadia Conti", "Nadia", "Other"),
+             title = paste("ID:", name, "<br>Messages:", message_count))
+    
+    edges <- edges %>% mutate(
+      title = paste("Messages:", value),
+      color = case_when(
+        value > 20 ~ "#08519c",
+        value > 10 ~ "#3182bd",
+        TRUE ~ "#bdd7e7"
+      ),
+      width = log1p(value) + 1
+    )
+    
+    visNetwork(nodes, edges) %>%
+      visEdges(arrows = "to", smooth = TRUE) %>%
+      visOptions(
+        highlightNearest = list(enabled = TRUE, degree = 1, hover = TRUE),
+        nodesIdSelection = list(enabled = TRUE, selected = input$selected_node)
+      ) %>%
+      visInteraction(dragNodes = TRUE, dragView = TRUE, zoomView = TRUE) %>%
+      visLayout(randomSeed = 11) %>%
       visLegend()
   })
   
   output$relationshipNet <- renderVisNetwork({
     df2 <- df %>%
-      mutate(rel_label = str_remove(relationship, "^Relationship_"),
-             rel_label = str_remove(rel_label, "_\\d+$"))
-    sender_nodes <- df2 %>% distinct(id = sender, label = sender, group = sender_type)
-    receiver_nodes <- df2 %>% distinct(id = receiver, label = receiver, group = receiver_type)
-    rel_nodes <- df2 %>% distinct(id = relationship, label = rel_label, group = "Relationship")
-    nodes <- bind_rows(sender_nodes, receiver_nodes, rel_nodes) %>% distinct(id, .keep_all = TRUE)
-    edges <- df2 %>% transmute(from = sender, to = relationship) %>%
+      mutate(
+        rel_label = str_remove(relationship, "^Relationship_"),
+        rel_label = str_remove(rel_label, "_\\d+$")
+      )
+    
+    sender_nodes <- df2 %>%
+      distinct(id = sender, label = sender, group = sender_type)
+    
+    receiver_nodes <- df2 %>%
+      distinct(id = receiver, label = receiver, group = receiver_type)
+    
+    rel_nodes <- df2 %>%
+      distinct(id = relationship, label = rel_label, group = "Relationship")
+    
+    nodes <- bind_rows(sender_nodes, receiver_nodes, rel_nodes) %>%
+      distinct(id, .keep_all = TRUE) %>%
+      mutate(
+        shape = case_when(
+          group == "Person" ~ "dot",
+          group == "Organization" ~ "ellipse",
+          group == "Vessel" ~ "diamond",
+          group == "Location" ~ "triangle",
+          group == "Relationship" ~ "box",
+          TRUE ~ "circle"
+        ),
+        color = case_when(
+          group == "Person" ~ "#6baed6",
+          group == "Organization" ~ "#ffd700",
+          group == "Vessel" ~ "#fb6a4a",
+          group == "Location" ~ "#74c476",
+          group == "Relationship" ~ "#d07be5",
+          TRUE ~ "#c0c0c0"
+        ),
+        title = paste0("<b>", label, "</b><br>Type: ", group)
+      )
+    
+    edges <- df2 %>%
+      transmute(from = sender, to = relationship) %>%
       bind_rows(df2 %>% transmute(from = relationship, to = receiver))
-    visNetwork(nodes, edges) %>% visEdges(arrows = "to") %>%
-      visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>% visLegend()
+    
+    visNetwork(nodes, edges, height = "700px", width = "100%") %>%
+      visEdges(arrows = "to", color = list(color = "#aaa", highlight = "red")) %>%
+      visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
+      visPhysics(solver = "forceAtlas2Based", stabilization = TRUE) %>%
+      visLayout(randomSeed = 11)
   })
   
+
+  
   # --- Keyword Insights ---
+  keyword_categories <- tibble::tibble(
+    word = c("nadia", "davis", "elise", "reef", "nemo", "neptune", "marina", "mako", 
+             "equipment", "foundation", "scope", "payment", "tonight", "meeting", "modified", "finalize", 
+             "documentation", "eastern", "bring"),
+    category = c("Person", "Person", "Person", "Location", "Location", "Location", "Location", "Location",
+                 "Construction", "Construction", "Construction", "Action", "Time", "Action", "Action", "Action",
+                 "Object", "Location", "Action")
+  )
+  
   output$keywordPlot <- renderPlot({
     req(input$selected_date)
     
@@ -187,10 +278,13 @@ server <- function(input, output, session) {
       unnest_tokens(word, content) %>%
       filter(!word %in% stop_words$word) %>%
       count(word, sort = TRUE) %>%
-      slice_max(n, n = 20)
+      slice_max(n, n = 20) %>%
+      left_join(keyword_categories, by = "word") %>%
+      mutate(category = ifelse(is.na(category), "Other", category)) %>%
+      filter(input$keyword_category == "All" | category == input$keyword_category)
     
-    ggplot(keywords, aes(x = reorder(word, n), y = n)) +
-      geom_col(fill = "#2171b5") +
+    ggplot(keywords, aes(x = reorder(word, n), y = n, fill = category)) +
+      geom_col() +
       coord_flip() +
       labs(
         title = paste("Top Keywords in Nadia-Related Messages (", input$selected_date, ")"),
@@ -198,6 +292,7 @@ server <- function(input, output, session) {
       ) +
       theme_minimal()
   })
+  
   
   # Timeline of Operational Focus
   output$focusTimelinePlot <- renderPlot({
@@ -207,20 +302,15 @@ server <- function(input, output, session) {
       Focus = c("Execution Planning", "Escalation Response", "Surveillance & Legal Framing",
                 "Disruption & Realignment", "Administrative Closure")
     )
-    
     ggplot(df_focus, aes(x = Date, y = 1)) +
-      geom_line(linewidth = 1.2, color = "steelblue") +
-      geom_point(size = 4, color = "steelblue") +
-      ylim(0.95, 1.05) +
+      geom_line(linewidth = 1.5, color = "steelblue") +
+      geom_point(size = 6, color = "steelblue") +
+      geom_text(aes(label = Focus), vjust = -1.5, angle = 30, size = 3.5, hjust = 0) +
+      ylim(0.95, 1.1) +
       theme_minimal() +
-      theme(
-        axis.title = element_blank(),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        panel.grid = element_blank()
-      ) +
-      ggtitle("Timeline of Nadia-Linked Operational Focus (Oct 8–12, 2040)") +
-      geom_text(aes(label = Focus, vjust = -1.5, angle = 20, size = 3.5))
+      theme(axis.title = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+            panel.grid = element_blank(), plot.title = element_text(face = "bold", size = 14)) +
+      ggtitle("Timeline of Nadia-Linked Operational Focus (Oct 8–12, 2040)")
   })
   
   # Nadia Event Classification
@@ -250,10 +340,15 @@ server <- function(input, output, session) {
     
     ggplot(nadia_related, aes(x = as.Date(timestamp), fill = Primary_Event)) +
       geom_histogram(binwidth = 1, color = "black", position = "stack") +
+      scale_fill_brewer(palette = "Set2") +
       labs(title = "Nadia Conti’s Timeline of Event Types",
            x = "Time", y = "Number of Messages") +
       theme_minimal() +
-      theme(legend.position = "right")
+      theme(
+        legend.title = element_blank(),
+        legend.position = "right",
+        plot.title = element_text(size = 14, face = "bold")
+      )
   })
   
   # Heatmap
@@ -272,14 +367,17 @@ server <- function(input, output, session) {
       ungroup()
     
     ggplot(nadia_actor_events, aes(x = Primary_Event, y = fct_reorder(actor, -n), fill = n)) +
-      geom_tile(color = "white") +
+      geom_tile(color = "white", linewidth = 0.3) +
       scale_fill_gradient(low = "white", high = "#cc0000") +
       labs(
         title = "Actors Involved in Nadia-Related Messages by Event Type",
         x = "Event Type", y = "Actor", fill = "Message Count"
       ) +
       theme_minimal() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")
+      )
   })
   
   output$evidenceEventPlot <- renderPlot({

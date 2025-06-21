@@ -11,8 +11,8 @@ library(visNetwork)
 library(plotly)
 
 # Load your data
-messages <- read_csv("/Users/summernguyen/Documents/summernguyenn/reefwhispers/data/communications_full.csv")
-df <- read_excel("/Users/summernguyen/Documents/summernguyenn/ISSS608-VAA/Take-home_Ex/Take-home_Ex02/data/Nadia Conti_copy.xlsx") %>%
+messages <- read_csv("../data/communications_full.csv")
+df <- read_excel("../data/Nadia Conti_copy.xlsx") %>%
   clean_names()
 
 # UI

@@ -5,7 +5,7 @@ account: vriadi
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 14970003
-bundleId: 10494805
+bundleId: 10495051
 url: https://vriadi.shinyapps.io/reefwhispers_app2/
 version: 1
 asMultiple: FALSE

@@ -1,114 +1,124 @@
 library(shiny)
 library(dplyr)
-library(ggplot2)
 library(visNetwork)
+library(ggplot2)
 library(DT)
+library(tidyr)
+library(stringr)
+library(tidytext)
+library(igraph)
 
-comm_full <- read.csv("data/communications_full.csv")
-print(comm_full)
+# ---- Load and process data ----
+comm_full <- read.csv("data/communications_full.csv", stringsAsFactors = FALSE)
 
+# Add dummy 'cluster' if missing
+if (!"cluster" %in% colnames(comm_full)) {
+  comm_full$cluster <- sample(1:2, nrow(comm_full), replace = TRUE)
+}
+
+# Create nodes
+nodes <- unique(c(comm_full$sender_label, comm_full$receiver_label)) %>%
+  data.frame(id = ., label = .) %>%
+  mutate(group = "All")
+
+# Create edges with weights
+edges <- comm_full %>%
+  group_by(from = sender_label, to = receiver_label) %>%
+  summarise(weight = n(), .groups = "drop")
+
+# Create keyword table
+keywords <- comm_full %>%
+  filter(!is.na(content)) %>%
+  unnest_tokens(word, content) %>%
+  filter(!word %in% stop_words$word) %>%
+  count(cluster, word, sort = TRUE) %>%
+  group_by(cluster) %>%
+  top_n(10, n)
+
+# Create pseudonym mention counts
+mention_counts <- comm_full %>%
+  pivot_longer(cols = c(sender_label, receiver_label), names_to = "type", values_to = "pseudonym") %>%
+  count(pseudonym, name = "count") %>%
+  arrange(desc(count))
+
+# Create heatmap data
+mention_heatmap <- comm_full %>%
+  count(sender = sender_label, pseudonym = receiver_label) %>%
+  complete(sender, pseudonym, fill = list(n = 0)) %>%
+  rename(count = n)
+
+# ---- UI ----
 ui <- fluidPage(
-  titlePanel("Temporal Pattern and Communication Network graph"),
-  
+  titlePanel("Communication Clusters and Pseudonyms"),
   sidebarLayout(
     sidebarPanel(
-      selectInput("week_select", "Select Week(s)", choices = unique(comm_full$week_label), selected = unique(comm_full$week_label), multiple = TRUE),
-      dateRangeInput("date_range", "Select Date Range", start = min(comm_full$date), end = max(comm_full$date)),
-      sliderInput("hour_range", "Hour of Day", min = 0, max = 23, value = c(6, 18)),
-      selectizeInput("sender_entity", "Sender Entity Type", selected = unique(comm_full$sender_type), choices = unique(comm_full$sender_type), multiple = TRUE),
-      #checkboxInput("select_all_sender", "Select All Senders", value = TRUE),
-      selectizeInput("sender", "Sender", selected = unique(comm_full$sender_label), choices = unique(comm_full$sender_label), multiple = TRUE),
-      selectizeInput("receiver_entity", "Receiver Entity Type", selected = unique(comm_full$receiver_type), choices = unique(comm_full$receiver_type), multiple = TRUE),
-      selectizeInput("receiver", "Receiver", selected = unique(comm_full$receiver_label), choices = unique(comm_full$receiver_label), multiple = TRUE),
-      actionButton("update", "Update View")
+      checkboxGroupInput("weeks", "Select Week(s):", choices = c("Week 1", "Week 2")),
+      dateRangeInput("daterange", "Select Date Range:", start = "2040-10-01", end = "2040-10-14"),
+      sliderInput("hour", "Hour of Day", min = 0, max = 23, value = c(8, 18)),
+      selectInput("individual", "Individual ID Selection", choices = c("", nodes$id)),
+      selectInput("cluster", "Cluster Selection", choices = sort(unique(keywords$cluster)))
     ),
-    
     mainPanel(
       tabsetPanel(
-        tabPanel("Temporal Pattern", plotOutput("time_plot")),
-        tabPanel("Heatmap", plotOutput("heatmap_plot")),
-        tabPanel("Communication Network", visNetworkOutput("net_plot")),
-        tabPanel("Receipts", dataTableOutput("comm_table"))
-        
+        tabPanel("Chart 1: Network",
+                 visNetworkOutput("network")
+        ),
+        tabPanel("Chart 2: Keywords",
+                 dataTableOutput("keyword_table")
+        ),
+        tabPanel("Pseudonyms General Usage",
+                 plotOutput("pseudonym_bar")
+        ),
+        tabPanel("Pseudonym Mentions",
+                 plotOutput("pseudonym_heatmap")
+        )
       )
     )
   )
 )
 
-# ---- Server ----
+# ---- SERVER ----
 server <- function(input, output, session) {
   
-  # Reactive data filtering
-  filtered_data <- eventReactive(input$update, {
-    comm_full %>%
-      filter(
-        hour >= input$hour_range[1] & hour <= input$hour_range[2],
-        (sender_label %in% input$sender | length(input$sender) == 0),
-        (receiver_label %in% input$receiver | length(input$receiver) == 0),
-        (sender_type == input$sender_entity | input$sender_entity == ""),
-        (receiver_type == input$receiver_entity | input$receiver_entity == ""),
-        (week_label %in% input$week_select | length(input$week_select) == 0),
-        date >= input$date_range[1] & date <= input$date_range[2]
-      )
-  })
-  
-  # ---- Time Series Plot (Daily with Facet by Week) ----
-  output$time_plot <- renderPlot({
-    df <- filtered_data() %>%
-      count(week_label, date)
+  output$network <- renderVisNetwork({
+    req(nodes, edges)
+    sel <- input$individual
+    highlight_nodes <- if (sel != "") unique(c(sel, edges$to[edges$from == sel], edges$from[edges$to == sel])) else NULL
     
-    ggplot(df, aes(x = date, y = n, group = week_label)) +
-      geom_line(color = "#0072B2", size = 1) +
-      facet_wrap(~ week_label, scales = "free_x", ncol = 1) +
-      labs(title = "Daily Communication Volume per Week", x = "Date", y = "Messages") +
-      theme_minimal()
-  })
-  
-  # ---- Heatmap Plot (Weekday vs Hour) ----
-  output$heatmap_plot <- renderPlot({
-    df <- filtered_data() %>%
-      count(week_label,weekday, hour)
-    
-    ggplot(df, aes(x = hour, y = weekday, fill = n)) +
-      geom_tile(color = "white") +
-      scale_fill_viridis_c() +
-      labs(title = "Communication Heatmap", x = "Hour", y = "Weekday", fill = "Messages") +
-      facet_wrap(~ week_label, ncol = 1) +
-      theme_minimal()
-  })
-  
-  # ---- Network Graph ----
-  output$net_plot <- renderVisNetwork({
-    df <- filtered_data() %>%
-      filter(!is.na(sender_label), !is.na(receiver_label)) %>%
-      count(sender_label, receiver_label, name = "value")  # value used for edge weight
-    
-    if (nrow(df) == 0) return(NULL)
-    
-    # Create node list with group for coloring
-    graph_nodes <- tibble(name = unique(c(df$sender_label, df$receiver_label))) %>%
-      mutate(id = name, label = name, group = name)  # group = name → each node colored uniquely
-    
-    # Rename edge columns for visNetwork
-    graph_edges <- df %>%
-      rename(from = sender_label, to = receiver_label)
-    
-    visNetwork(nodes = graph_nodes, edges = graph_edges) %>%
+    visNetwork(nodes, edges) %>%
+      visNodes(color = list(highlight = "red")) %>%
       visEdges(arrows = "to") %>%
       visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
-      visLayout(randomSeed = 123) %>%
-      visPhysics(stabilization = TRUE) %>%
       visInteraction(navigationButtons = TRUE) %>%
-      visLegend()
+      visIgraphLayout()
   })
   
-  # ---- Data Table ----
-  output$comm_table <- renderDataTable({
-    filtered_data() %>%
-      datatable(options = list(pageLength = 10))
+  output$keyword_table <- renderDataTable({
+    req(input$cluster)
+    keywords %>%
+      filter(cluster == input$cluster)
+  })
+  
+  output$pseudonym_bar <- renderPlot({
+    req(mention_counts)
+    ggplot(mention_counts, aes(x = reorder(pseudonym, count), y = count)) +
+      geom_col(fill = "#2c7fb8") +
+      coord_flip() +
+      labs(title = "Total Mentions of Identified and Suspected Pseudonyms",
+           x = "Pseudonym", y = "Frequency") +
+      theme_minimal()
+  })
+  
+  output$pseudonym_heatmap <- renderPlot({
+    req(mention_heatmap)
+    ggplot(mention_heatmap, aes(x = pseudonym, y = sender, fill = count)) +
+      geom_tile(color = "white") +
+      geom_text(aes(label = ifelse(count > 0, count, "")), size = 3) +
+      scale_fill_gradient(low = "#e0ecf4", high = "#0868ac") +
+      labs(title = "Pseudonym Mentions by Sender", x = "Pseudonym", y = "Sender") +
+      theme_minimal()
   })
 }
 
-
-# ---- Run App ----
+# ---- RUN APP ----
 shinyApp(ui = ui, server = server)

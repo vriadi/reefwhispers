@@ -24,7 +24,7 @@ ui <- navbarPage(
              sidebarPanel(
                checkboxGroupInput("weeks", "Select Week(s)", choices = c("Week 1", "Week 2"), selected = c("Week 1", "Week 2")),
                dateRangeInput("date_range", "Select Date Range", start = "2040-10-01", end = "2040-10-14"),
-               sliderInput("hour_range", "Hour of Day", min = 0, max = 23, value = c(8, 18)),
+               sliderInput("hour_range", "Hour of Day", min = 0, max = 23, value = c(0, 23)),
                textInput("sender", "Sender", ""),
                textInput("receiver", "Receiver", ""),
                actionButton("update", "Update View")

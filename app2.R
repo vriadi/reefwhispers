@@ -49,12 +49,12 @@ mention_heatmap <- comm_full %>%
 
 # ---- UI ----
 ui <- fluidPage(
-  titlePanel("Communication Clusters and Pseudonyms"),
+  titlePanel(""),
   sidebarLayout(
     sidebarPanel(
       checkboxGroupInput("weeks", "Select Week(s):", choices = c("Week 1", "Week 2")),
       dateRangeInput("daterange", "Select Date Range:", start = "2040-10-01", end = "2040-10-14"),
-      sliderInput("hour", "Hour of Day", min = 0, max = 23, value = c(8, 18)),
+      sliderInput("hour", "Hour of Day", min = 0, max = 23, value = c(0, 23)),
       selectInput("individual", "Individual ID Selection", choices = c("", nodes$id)),
       selectInput("cluster", "Cluster Selection", choices = sort(unique(keywords$cluster)))
     ),

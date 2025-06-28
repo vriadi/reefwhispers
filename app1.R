@@ -1,56 +1,115 @@
 library(shiny)
+library(shinyWidgets) 
 library(dplyr)
 library(ggplot2)
 library(visNetwork)
 library(DT)
 
-comm_full <- read.csv("data/communications_full.csv")
-print(comm_full)
+comm_full <- read.csv("data/communications_full.csv") |>
+  mutate(date = as.Date(date))             # make sure it’s Date, not character
+
+valid_dates <- sort(unique(comm_full$date))
+
 
 ui <- fluidPage(
-  titlePanel("Temporal Pattern and Communication Network graph"),
+  titlePanel(""),
   
   sidebarLayout(
     sidebarPanel(
-      selectInput("week_select", "Select Week(s)", choices = unique(comm_full$week_label), selected = unique(comm_full$week_label), multiple = TRUE),
-      dateRangeInput("date_range", "Select Date Range", start = min(comm_full$date), end = max(comm_full$date)),
-      sliderInput("hour_range", "Hour of Day", min = 0, max = 23, value = c(6, 18)),
-      selectizeInput("sender_entity", "Sender Entity Type", selected = unique(comm_full$sender_type), choices = unique(comm_full$sender_type), multiple = TRUE),
-      #checkboxInput("select_all_sender", "Select All Senders", value = TRUE),
-      selectizeInput("sender", "Sender", selected = unique(comm_full$sender_label), choices = unique(comm_full$sender_label), multiple = TRUE),
-      selectizeInput("receiver_entity", "Receiver Entity Type", selected = unique(comm_full$receiver_type), choices = unique(comm_full$receiver_type), multiple = TRUE),
-      selectizeInput("receiver", "Receiver", selected = unique(comm_full$receiver_label), choices = unique(comm_full$receiver_label), multiple = TRUE),
+      # Week selector -- select-all built-in
+      pickerInput(
+        "week_select", "Select Week(s)",
+        choices   = unique(comm_full$week_label),
+        selected  = unique(comm_full$week_label),
+        multiple  = TRUE,
+        options   = list(`actions-box` = TRUE, `live-search` = TRUE)
+      ),
+      
+      # Date range selector that only allows valid_dates
+      airDatepickerInput(
+        inputId   = "date_range",
+        label     = "Select Date Range",
+        range     = TRUE,
+        value     = c(min(valid_dates), max(valid_dates)),
+        minDate   = min(valid_dates),
+        maxDate   = max(valid_dates),
+        disabledDates = setdiff(
+          seq(min(valid_dates), max(valid_dates), by = "day"),
+          valid_dates                         # <- the dates you want to grey-out
+        )
+      ),
+      
+      sliderInput("hour_range", "Hour of Day", min = 0, max = 23, value = c(0, 23)),
+      
+      ## Sender entity / label
+      pickerInput(
+        "sender_entity", "Sender Entity Type",
+        choices  = unique(comm_full$sender_type),
+        selected = unique(comm_full$sender_type),
+        multiple = TRUE,
+        options  = list(`actions-box` = TRUE, `live-search` = TRUE)
+      ),
+      pickerInput(
+        "sender", "Sender",
+        choices  = unique(comm_full$sender_label),
+        selected = unique(comm_full$sender_label),
+        multiple = TRUE,
+        options  = list(`actions-box` = TRUE, `live-search` = TRUE)
+      ),
+      
+      ## Receiver entity / label
+      pickerInput(
+        "receiver_entity", "Receiver Entity Type",
+        choices  = unique(comm_full$receiver_type),
+        selected = unique(comm_full$receiver_type),
+        multiple = TRUE,
+        options  = list(`actions-box` = TRUE, `live-search` = TRUE)
+      ),
+      pickerInput(
+        "receiver", "Receiver",
+        choices  = unique(comm_full$receiver_label),
+        selected = unique(comm_full$receiver_label),
+        multiple = TRUE,
+        options  = list(`actions-box` = TRUE, `live-search` = TRUE)
+      ),
+      
       actionButton("update", "Update View")
     ),
     
     mainPanel(
       tabsetPanel(
         tabPanel("Temporal Pattern", plotOutput("time_plot")),
-        tabPanel("Heatmap", plotOutput("heatmap_plot")),
+        tabPanel("Heatmap",        plotOutput("heatmap_plot")),
         tabPanel("Communication Network", visNetworkOutput("net_plot")),
         tabPanel("Receipts", dataTableOutput("comm_table"))
-        
       )
     )
   )
 )
 
+
 # ---- Server ----
 server <- function(input, output, session) {
   
   # Reactive data filtering
-  filtered_data <- eventReactive(input$update, {
-    comm_full %>%
-      filter(
-        hour >= input$hour_range[1] & hour <= input$hour_range[2],
-        (sender_label %in% input$sender | length(input$sender) == 0),
-        (receiver_label %in% input$receiver | length(input$receiver) == 0),
-        (sender_type == input$sender_entity | input$sender_entity == ""),
-        (receiver_type == input$receiver_entity | input$receiver_entity == ""),
-        (week_label %in% input$week_select | length(input$week_select) == 0),
-        date >= input$date_range[1] & date <= input$date_range[2]
-      )
-  })
+  filtered_data <- eventReactive(
+    input$update,
+    {                           
+      comm_full %>%
+        filter(
+          hour >= input$hour_range[1] & hour <= input$hour_range[2],
+          (sender_label   %in% input$sender          | length(input$sender)          == 0),
+          (receiver_label %in% input$receiver        | length(input$receiver)        == 0),
+          (sender_type    %in% input$sender_entity   | length(input$sender_entity)   == 0),
+          (receiver_type  %in% input$receiver_entity | length(input$receiver_entity) == 0),
+          (week_label     %in% input$week_select     | length(input$week_select)     == 0),
+          date >= input$date_range[1] & date <= input$date_range[2]
+        )
+    },
+    ignoreInit = FALSE,   
+    ignoreNULL = FALSE    
+  )
+  
   
   # ---- Time Series Plot (Daily with Facet by Week) ----
   output$time_plot <- renderPlot({

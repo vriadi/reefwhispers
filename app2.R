@@ -5,27 +5,47 @@ library(ggplot2)
 library(DT)
 library(tidyr)
 library(stringr)
+library(tidytext)
+library(igraph)
 
-# ---- Simulated placeholder data ----
-nodes <- data.frame(id = c("Mako", "Neptune", "Remora", "The Intern", "Mrs. Money"),
-                    label = c("Mako", "Neptune", "Remora", "The Intern", "Mrs. Money"),
-                    group = c("A", "A", "B", "B", "C"))
+# ---- Load and process data ----
+comm_full <- read.csv("data/communications_full.csv", stringsAsFactors = FALSE)
 
-edges <- data.frame(from = c("Mako", "Neptune", "Remora", "Remora"),
-                    to = c("Neptune", "Remora", "The Intern", "Mrs. Money"))
+# Add dummy 'cluster' if missing
+if (!"cluster" %in% colnames(comm_full)) {
+  comm_full$cluster <- sample(1:2, nrow(comm_full), replace = TRUE)
+}
 
-keywords <- data.frame(cluster = c(1, 1, 1, 2, 2),
-                       word = c("reef", "money", "lookout", "intern", "middleman"),
-                       n = c(123, 91, 80, 90, 50))
+# Create nodes
+nodes <- unique(c(comm_full$sender_label, comm_full$receiver_label)) %>%
+  data.frame(id = ., label = .) %>%
+  mutate(group = "All")
 
-pseudonyms <- c("Mako", "Neptune", "Remora", "The Intern", "Mrs. Money")
-mention_counts <- data.frame(
-  pseudonym = pseudonyms,
-  count = c(112, 68, 58, 38, 49)
-)
+# Create edges with weights
+edges <- comm_full %>%
+  group_by(from = sender_label, to = receiver_label) %>%
+  summarise(weight = n(), .groups = "drop")
 
-mention_heatmap <- expand.grid(sender = pseudonyms, pseudonym = pseudonyms) %>%
-  mutate(count = sample(0:5, n(), replace = TRUE))
+# Create keyword table
+keywords <- comm_full %>%
+  filter(!is.na(content)) %>%
+  unnest_tokens(word, content) %>%
+  filter(!word %in% stop_words$word) %>%
+  count(cluster, word, sort = TRUE) %>%
+  group_by(cluster) %>%
+  top_n(10, n)
+
+# Create pseudonym mention counts
+mention_counts <- comm_full %>%
+  pivot_longer(cols = c(sender_label, receiver_label), names_to = "type", values_to = "pseudonym") %>%
+  count(pseudonym, name = "count") %>%
+  arrange(desc(count))
+
+# Create heatmap data
+mention_heatmap <- comm_full %>%
+  count(sender = sender_label, pseudonym = receiver_label) %>%
+  complete(sender, pseudonym, fill = list(n = 0)) %>%
+  rename(count = n)
 
 # ---- UI ----
 ui <- fluidPage(
@@ -36,7 +56,7 @@ ui <- fluidPage(
       dateRangeInput("daterange", "Select Date Range:", start = "2040-10-01", end = "2040-10-14"),
       sliderInput("hour", "Hour of Day", min = 0, max = 23, value = c(8, 18)),
       selectInput("individual", "Individual ID Selection", choices = c("", nodes$id)),
-      selectInput("cluster", "Cluster Selection", choices = c(1, 2))
+      selectInput("cluster", "Cluster Selection", choices = sort(unique(keywords$cluster)))
     ),
     mainPanel(
       tabsetPanel(
@@ -60,8 +80,8 @@ ui <- fluidPage(
 # ---- SERVER ----
 server <- function(input, output, session) {
   
-  # Chart 1: visNetwork
   output$network <- renderVisNetwork({
+    req(nodes, edges)
     sel <- input$individual
     highlight_nodes <- if (sel != "") unique(c(sel, edges$to[edges$from == sel], edges$from[edges$to == sel])) else NULL
     
@@ -73,14 +93,14 @@ server <- function(input, output, session) {
       visIgraphLayout()
   })
   
-  # Chart 2: Table of top keywords
   output$keyword_table <- renderDataTable({
+    req(input$cluster)
     keywords %>%
       filter(cluster == input$cluster)
   })
   
-  # Pseudonym bar chart
   output$pseudonym_bar <- renderPlot({
+    req(mention_counts)
     ggplot(mention_counts, aes(x = reorder(pseudonym, count), y = count)) +
       geom_col(fill = "#2c7fb8") +
       coord_flip() +
@@ -89,10 +109,9 @@ server <- function(input, output, session) {
       theme_minimal()
   })
   
-  # Pseudonym mentions heatmap
   output$pseudonym_heatmap <- renderPlot({
-    mention_heatmap %>%
-      ggplot(aes(x = pseudonym, y = sender, fill = count)) +
+    req(mention_heatmap)
+    ggplot(mention_heatmap, aes(x = pseudonym, y = sender, fill = count)) +
       geom_tile(color = "white") +
       geom_text(aes(label = ifelse(count > 0, count, "")), size = 3) +
       scale_fill_gradient(low = "#e0ecf4", high = "#0868ac") +

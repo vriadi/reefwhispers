@@ -109,7 +109,7 @@ server <- function(input, output, session) {
       pivot_longer(everything(), names_to = "Type", values_to = "Count") %>%
       mutate(Percent = Count / sum(Count), Label = paste0(round(Percent * 100), "%\n(", Count, " msgs)"))
     plot_ly(nadia_counts, labels = ~Type, values = ~Count, type = 'pie', textinfo = 'label+percent',
-            marker = list(colors = c("yellow", "green"))) %>%
+            marker = list(colors = c("black", "pink"))) %>%
       layout(title = "Nadia Conti's Messages")
   })
   

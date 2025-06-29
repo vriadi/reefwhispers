@@ -50,6 +50,50 @@ mention_heatmap <- comm_full %>%
 # ---- UI ----
 ui <- fluidPage(
   titlePanel(""),
+  tags$head(
+    tags$style(HTML("
+    /* Data selection input UI */
+    .well {
+      background-color: #181d31 !important;
+      color: white; 
+    }
+    
+    /* Bold and pink for active tab */
+    .nav-tabs > li.active > a, 
+    .nav-tabs > li.active > a:focus, 
+    .nav-tabs > li.active > a:hover {
+      background-color: #f6e3f3 !important;  /* Light pink */
+      font-weight: bold !important;
+      color: black !important;
+    }
+
+    /* Inactive tabs style*/
+    .nav-tabs > li > a {
+      background-color: #f9f9f9;
+      color: black;
+      font-weight: bold !important;
+    }
+
+    /* Hover style */
+    .nav-tabs > li > a:hover {
+      background-color: #f1f1f1;
+      color: #333;
+    }
+    
+    /* Add spacing between tabs and content */
+    .tab-content .shiny-plot-output,
+    .tab-content .datatables,
+    .tab-content .vis-network {
+      margin-top: 20px;
+    }
+    
+    /* Add spacing below the tab bar, including 'Select by id' */
+    .tab-content .vis-network-html-widget {
+      margin-top: 20px;
+    }
+
+    "))
+  ),
   sidebarLayout(
     sidebarPanel(
       checkboxGroupInput("weeks", "Select Week(s):", choices = c("Week 1", "Week 2")),
@@ -106,7 +150,10 @@ server <- function(input, output, session) {
       coord_flip() +
       labs(title = "Total Mentions of Identified and Suspected Pseudonyms",
            x = "Pseudonym", y = "Frequency") +
-      theme_minimal()
+      theme_minimal()+
+      theme(
+        plot.title = element_text(face = "bold", size = 18)  
+      )
   })
   
   output$pseudonym_heatmap <- renderPlot({
@@ -116,7 +163,10 @@ server <- function(input, output, session) {
       geom_text(aes(label = ifelse(count > 0, count, "")), size = 3) +
       scale_fill_gradient(low = "#e0ecf4", high = "#0868ac") +
       labs(title = "Pseudonym Mentions by Sender", x = "Pseudonym", y = "Sender") +
-      theme_minimal()
+      theme_minimal()+
+      theme(
+        plot.title = element_text(face = "bold", size = 18)  
+      )
   })
 }
 

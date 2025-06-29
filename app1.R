@@ -9,14 +9,58 @@ comm_full <- read.csv("data/communications_full.csv") |>
   mutate(date = as.Date(date))             # make sure it’s Date, not character
 
 valid_dates <- sort(unique(comm_full$date))
-
-
+  
 ui <- fluidPage(
   titlePanel(""),
+  tags$head(
+    tags$style(HTML("
+    /* Data selection input UI */
+    .well {
+      background-color: #181d31 !important;
+      color: white; 
+    }
+    
+    /* Bold and pink for active tab */
+    .nav-tabs > li.active > a, 
+    .nav-tabs > li.active > a:focus, 
+    .nav-tabs > li.active > a:hover {
+      background-color: #f6e3f3 !important;  /* Light pink */
+      font-weight: bold !important;
+      color: black !important;
+    }
+
+    /* Inactive tabs style*/
+    .nav-tabs > li > a {
+      background-color: #f9f9f9;
+      color: black;
+      font-weight: bold !important;
+    }
+
+    /* Hover style */
+    .nav-tabs > li > a:hover {
+      background-color: #f1f1f1;
+      color: #333;
+    }
+    
+    /* Add spacing between tabs and content */
+    .tab-content .shiny-plot-output,
+    .tab-content .datatables,
+    .tab-content .vis-network {
+      margin-top: 20px;
+    }
+    
+    /* Add spacing below the tab bar, including 'Select by id' */
+    .tab-content .vis-network-html-widget {
+      margin-top: 20px;
+    }
+
+    "))
+  ),
+    
   
   sidebarLayout(
     sidebarPanel(
-      # Week selector -- select-all built-in
+      # Week selector -- default select-all
       pickerInput(
         "week_select", "Select Week(s)",
         choices   = unique(comm_full$week_label),
@@ -120,7 +164,10 @@ server <- function(input, output, session) {
       geom_line(color = "#0072B2", size = 1) +
       facet_wrap(~ week_label, scales = "free_x", ncol = 1) +
       labs(title = "Daily Communication Volume per Week", x = "Date", y = "Messages") +
-      theme_minimal()
+      theme_minimal()+
+      theme(
+        plot.title = element_text(face = "bold", size = 18)  
+      )
   })
   
   # ---- Heatmap Plot (Weekday vs Hour) ----
@@ -133,7 +180,10 @@ server <- function(input, output, session) {
       scale_fill_viridis_c() +
       labs(title = "Communication Heatmap", x = "Hour", y = "Weekday", fill = "Messages") +
       facet_wrap(~ week_label, ncol = 1) +
-      theme_minimal()
+      theme_minimal() +
+      theme(
+        plot.title = element_text(face = "bold", size = 18)  
+      )
   })
   
   # ---- Network Graph ----

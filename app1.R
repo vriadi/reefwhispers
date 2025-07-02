@@ -14,11 +14,11 @@ ui <- fluidPage(
   titlePanel(""),
   tags$head(
     tags$style(HTML("
-    /* Data selection input UI */
+    /* Data selection input UI 
     .well {
       background-color: #181d31 !important;
       color: white; 
-    }
+    }*/
     
     /* Bold and pink for active tab */
     .nav-tabs > li.active > a, 

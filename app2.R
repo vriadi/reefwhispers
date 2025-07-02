@@ -137,6 +137,17 @@ server <- function(input, output, session) {
   output$keyword_table <- renderDataTable({
     req(input$cluster)
     
+    df <- filtered_data()
+    
+    # Tokenize words and compute frequency by cluster
+    keywords <- df %>%
+      unnest_tokens(word, content) %>%
+      anti_join(stop_words, by = "word") %>%
+      count(cluster, word, sort = TRUE)
+    
+    req(nrow(keywords) > 0)
+    req(input$cluster %in% keywords$cluster)
+    
     keywords %>%
       filter(cluster == input$cluster) %>%
       arrange(desc(n)) %>%
@@ -146,7 +157,10 @@ server <- function(input, output, session) {
         rownames = FALSE,
         options = list(
           pageLength = 10,
-          lengthMenu = list(c(10, 20, 30, 40, 50, 60, 70, 80, 90, 100), c('10','20','30','40','50','60','70','80','90','100')),
+          lengthMenu = list(
+            c(10, 20, 30, 40, 50, 60, 70, 80, 90, 100),
+            c('10','20','30','40','50','60','70','80','90','100')
+          ),
           autoWidth = TRUE,
           columnDefs = list(
             list(className = 'dt-center', targets = "_all")

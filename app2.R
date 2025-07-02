@@ -9,12 +9,9 @@ library(stringr)
 library(tidytext)
 library(igraph)
 library(lubridate)
-library(shinyWidgets)
 
 # ---- LOAD & PROCESS DATA ----
-comm_full <- read.csv("data/communications_full.csv") |>
-  mutate(date = as.Date(date))             # make sure it’s Date, not character
-valid_dates <- sort(unique(comm_full$date))
+comm_full <- read.csv("data/communications_full.csv", stringsAsFactors = FALSE)
 
 comm_full <- comm_full %>%
   mutate(
@@ -37,45 +34,9 @@ ui <- fluidPage(
   titlePanel(NULL),
   tags$head(
     tags$style(HTML("
-      /* Data selection input UI 
-    .well {
-      background-color: #181d31 !important;
-      color: white; 
-    }*/
-    
-    /* Bold and pink for active tab */
-    .nav-tabs > li.active > a, 
-    .nav-tabs > li.active > a:focus, 
-    .nav-tabs > li.active > a:hover {
-      background-color: #f6e3f3 !important;  /* Light pink */
-      font-weight: bold !important;
-      color: black !important;
-    }
-
-    /* Inactive tabs style*/
-    .nav-tabs > li > a {
-      background-color: #f9f9f9;
-      color: black;
-      font-weight: bold !important;
-    }
-
-    /* Hover style */
-    .nav-tabs > li > a:hover {
-      background-color: #f1f1f1;
-      color: #333;
-    }
-    
-    /* Add spacing between tabs and content */
-    .tab-content .shiny-plot-output,
-    .tab-content .datatables,
-    .tab-content .vis-network {
-      margin-top: 20px;
-    }
-    
-    /* Add spacing below the tab bar, including 'Select by id' */
-    .tab-content .vis-network-html-widget {
-      margin-top: 20px;
-    }
+      h2 { font-weight: bold; color: #1c1c1c; }
+      .tabbable > .nav > li > a { font-weight: bold; }
+      .well { background-color: #f7f7f7; border: 1px solid #ddd; }
     "))
   ),
   fluidRow(
@@ -84,18 +45,7 @@ ui <- fluidPage(
       wellPanel(
         h4("Global Filters"),
         checkboxGroupInput("weeks", "Select Week(s)", choices = c("Week 1", "Week 2")),
-        airDatepickerInput(
-          inputId = "daterange",
-          label = "Select Date Range",
-          range = TRUE,
-          value = c(min(valid_dates), max(valid_dates)),
-          minDate = min(valid_dates),
-          maxDate = max(valid_dates),
-          disabledDates = setdiff(
-            seq(min(valid_dates), max(valid_dates), by = "day"),
-            valid_dates
-          )
-        ),
+        dateRangeInput("daterange", "Select Date Range:", start = "2040-10-01", end = "2040-10-14"),
         actionButton("update_global", "Update View")  # <-- Added this button
       ),
       br(),
@@ -119,8 +69,8 @@ ui <- fluidPage(
     ),
     column(
       width = 9,
-      h2(""),
-      p(""),
+      h2("Communication Clusters and Pseudonyms"),
+      p("Identifying closely-associated groups, their predominant topics, and pseudonym usage & exploration."),
       tabsetPanel(
         tabPanel("Communication Clusters", visNetworkOutput("network")),
         tabPanel("Predominant Topics", dataTableOutput("keyword_table")),

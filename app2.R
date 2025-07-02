@@ -145,8 +145,6 @@ server <- function(input, output, session) {
   
   output$keyword_table <- renderDataTable({
     req(input$cluster)
-<<<<<<< HEAD
-=======
     
     df <- filtered_data()
     
@@ -159,7 +157,6 @@ server <- function(input, output, session) {
     req(nrow(keywords) > 0)
     req(input$cluster %in% keywords$cluster)
     
->>>>>>> b613d401de0847e3d69cda32a1e2d48edaafef84
     keywords %>%
       filter(cluster == input$cluster) %>%
       arrange(desc(n)) %>%

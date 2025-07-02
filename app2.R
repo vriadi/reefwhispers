@@ -32,6 +32,15 @@ nodes <- unique(c(comm_full$sender_label, comm_full$receiver_label)) %>%
   data.frame(id = ., label = .) %>%
   mutate(group = "All")
 
+# Create keyword tableMore actions
+keywords <- comm_full %>%
+  filter(!is.na(content)) %>%
+  unnest_tokens(word, content) %>%
+  filter(!word %in% stop_words$word) %>%
+  count(cluster, word, sort = TRUE) %>%
+  group_by(cluster) %>%
+  top_n(10, n)
+
 # ---- UI ----
 ui <- fluidPage(
   titlePanel(NULL),
@@ -169,7 +178,7 @@ server <- function(input, output, session) {
                            group = cluster_map[as.character(clusters$membership)],
                            value = deg_sent + deg_recv)
     edges_df <- data.frame(from = as_edgelist(graph_comm)[, 1], to = as_edgelist(graph_comm)[, 2], arrows = "to")
-    
+
     visNetwork(nodes_df, edges_df) %>%
       visOptions(highlightNearest = TRUE) %>%
       visLegend() %>%
@@ -186,7 +195,6 @@ server <- function(input, output, session) {
   
   output$keyword_table <- renderDataTable({
     req(input$cluster)
-    
     keywords %>%
       filter(cluster == input$cluster) %>%
       arrange(desc(n)) %>%

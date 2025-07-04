@@ -16,38 +16,59 @@ df <- read_excel("data/Nadia Conti_copy.xlsx") %>%
   clean_names()
 
 # UI
+# Enhanced Shiny App UI & UX - Time Series and Social Network Graph
+
+# UI
 ui <- navbarPage(
   "Time Series Analysis and Social Network Graph",
   
   tabPanel("Overview",
-           sidebarLayout(
-             sidebarPanel(
-               checkboxGroupInput("weeks", "Select Week(s)", choices = c("Week 1", "Week 2"), selected = c("Week 1", "Week 2")),
-               dateRangeInput("date_range", "Select Date Range", start = "2040-10-01", end = "2040-10-14"),
-               sliderInput("hour_range", "Hour of Day", min = 0, max = 23, value = c(0, 23)),
-               textInput("sender", "Sender", ""),
-               textInput("receiver", "Receiver", ""),
-               actionButton("update", "Update View")
-             ),
-             mainPanel(
-               tabsetPanel(
-                 tabPanel("Temporal Pattern",
-                          fluidRow(
-                            column(6, plotlyOutput("nadiaPie")),
-                            column(6, uiOutput("noteBox"))
-                          ),
-                          fluidRow(
-                            column(6, plotlyOutput("barHourDay")),
-                            column(6, plotlyOutput("mentionPattern"))
-                          )
-                 ),
-                 tabPanel("Direct Relationship Network",
-                          selectInput("selected_node", "Select by ID", choices = NULL, selected = "Nadia Conti"),
-                          visNetworkOutput("directNet", height = "600px")
-                 ),
-                 tabPanel("Relationship Network",
-                          visNetworkOutput("relationshipNet", height = "700px")
-                 )
+           fluidPage(
+             fluidRow(
+               column(3,
+                      wellPanel(
+                        checkboxGroupInput("weeks", "Select Week(s)", choices = c("Week 1", "Week 2"), selected = c("Week 1", "Week 2")),
+                        dateRangeInput("date_range", "Select Date Range", start = "2040-10-01", end = "2040-10-14"),
+                        sliderInput("hour_range", "Hour of Day", min = 0, max = 23, value = c(8, 18)),
+                        textInput("sender", "Sender", placeholder = "e.g., Nadia Conti"),
+                        textInput("receiver", "Receiver", placeholder = "e.g., Elise"),
+                        actionButton("update", "Update View"),      # ✅ <- THIS LINE NEEDS A COMMA if followed by more
+                        actionButton("reset", "Reset Filters")      # ✅ <- Make sure this is inside the same function
+                      )
+               ),
+               column(9,
+                      tabsetPanel(
+                        tabPanel("Temporal Pattern",
+                                 fluidRow(
+                                   column(6,
+                                          div(class = "card",
+                                              plotlyOutput("nadiaPie")
+                                          )),
+                                   column(6,
+                                          div(class = "card",
+                                              uiOutput("noteBox")
+                                          ))
+                                 ),
+                                 fluidRow(
+                                   column(6,
+                                          div(class = "card",
+                                              plotlyOutput("barHourDay")
+                                          )),
+                                   column(6,
+                                          div(class = "card",
+                                              plotlyOutput("mentionPattern")
+                                          ))
+                                 )
+                        ),
+                        tabPanel("Direct Relationship Network",
+                                 selectInput("selected_node", "Select by ID",
+                                             choices = NULL, selected = "Nadia Conti"),
+                                 visNetworkOutput("directNet", height = "600px")
+                        ),
+                        tabPanel("Relationship Network",
+                                 visNetworkOutput("relationshipNet", height = "700px")
+                        )
+                      )
                )
              )
            )
@@ -62,15 +83,14 @@ ui <- navbarPage(
                                       "October 10th" = "2040-10-10",
                                       "October 11th" = "2040-10-11",
                                       "October 12th" = "2040-10-12"),
-                          inline = TRUE
-             ),
+                          inline = TRUE),
              selectInput("keyword_category", "Filter by Category",
                          choices = c("All", "Person", "Location", "Construction", "Object", "Time", "Action", "Other"),
                          selected = "All"),
              plotOutput("keywordPlot", height = "600px")
            )
   ),
-  
+
   tabPanel("Nadia’s Timeline of Events and Operational Focus",
            tabsetPanel(
              tabPanel("Operational focus",
@@ -87,7 +107,6 @@ ui <- navbarPage(
   )
 )
 
-
 # Server
 server <- function(input, output, session) {
   
@@ -96,10 +115,10 @@ server <- function(input, output, session) {
     df <- messages %>%
       mutate(time = ymd_hms(timestamp)) %>%
       filter(between(hour(time), input$hour_range[1], input$hour_range[2])) %>%
-      filter(date(time) >= input$date_range[1] & date(time) <= input$date_range[2])
-    if (input$sender != "") df <- df %>% filter(sender == input$sender)
-    if (input$receiver != "") df <- df %>% filter(receiver == input$receiver)
+      filter(date(time) >= input$date_range[1] & date(time) <= input$date_range[2]) %>%
+      filter(sender == "Nadia Conti" | receiver == "Nadia Conti")
     df
+  
   })
   
   output$nadiaPie <- renderPlotly({

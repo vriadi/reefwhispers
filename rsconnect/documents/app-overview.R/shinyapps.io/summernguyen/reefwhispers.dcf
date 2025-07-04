@@ -1,0 +1,12 @@
+name: reefwhispers
+title: reefwhispers
+username: summernguyen
+account: summernguyen
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 15032500
+bundleId: 10564631
+url: https://summernguyen.shinyapps.io/reefwhispers/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

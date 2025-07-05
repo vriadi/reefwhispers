@@ -42,6 +42,7 @@ keywords <- comm_full %>%
   count(cluster, word, sort = TRUE) %>%
   group_by(cluster) 
 
+
 # ---- UI ----
 ui <- fluidPage(
   titlePanel(NULL),
@@ -113,11 +114,13 @@ ui <- fluidPage(
         h4("Local Filters"),
         conditionalPanel(
           condition = "$('ul.nav li.active a').text() === 'Communication Clusters'",
-          selectizeInput("node_select", "Select Node ID(s):", choices = NULL, multiple = TRUE),
-          selectizeInput("cluster_select", "Select Cluster(s):", choices = NULL, multiple = TRUE),
-          selectInput("cluster_algo", "Clustering Algorithm:",
+          selectInput("cluster_algo", "Select Clustering Algorithm",
                       choices = c("Walktrap", "Louvain", "Infomap", "Label Propagation"),
-                      selected = "Walktrap")
+                      selected = "Walktrap"),
+          selectizeInput("cluster_select", "Select Cluster(s)", choices = NULL, multiple = TRUE),
+          selectizeInput("node_select", "Select Node ID(s)", choices = NULL, multiple = TRUE)
+          
+          
         ),
         conditionalPanel(
           condition = "$('ul.nav li.active a').text() === 'Pseudonyms General Usage' || $('ul.nav li.active a').text() === 'Pseudonym Specific Mentions'",
@@ -125,7 +128,7 @@ ui <- fluidPage(
         ),
         conditionalPanel(
           condition = "$('ul.nav li.active a').text() === 'Predominant Topics'",
-          selectInput("clustering_algo", "Select Clustering Algorithm",
+          selectInput("clustering_algo_predtopic", "Select Clustering Algorithm",
                       choices = c("Walktrap", "Louvain", "Infomap", "Label Propagation"),
                       selected = "Walktrap"),
           selectInput("cluster", "Select Cluster", choices = NULL)
@@ -138,7 +141,7 @@ ui <- fluidPage(
       h2(""),
       p(""),
       tabsetPanel(
-        #tabPanel("Communication Clusters", visNetworkOutput("network")),
+        id = "tabs", 
         tabPanel("Communication Clusters", 
                  textOutput("selected_algo"),
                  visNetworkOutput("network")),
@@ -163,12 +166,20 @@ server <- function(input, output, session) {
   })
   
   observe({
+    req(filtered_data())
+    
     updateSelectInput(session, "cluster", choices = sort(unique(filtered_data()$cluster)))
-    node_choices <- sort(unique(comm_full$sender_label))
-    cluster_choices <- sort(unique(paste0("Cluster ", unique(comm_full$cluster))))
-    updateSelectizeInput(session, "node_select", choices = c("All", node_choices), server = TRUE)
-    updateSelectizeInput(session, "cluster_select", choices = c("All", cluster_choices), server = TRUE)
+    
+    req(input$tabs)  # <- Add this line to guard the if-statement
+    
+    if (input$tabs == "Communication Clusters") {
+      node_choices <- sort(unique(filtered_data()$sender_label))
+      cluster_choices <- sort(unique(paste0("Cluster ", filtered_data()$cluster)))
+      updateSelectizeInput(session, "node_select", choices = c("All", node_choices), server = TRUE)
+      updateSelectizeInput(session, "cluster_select", choices = c("All", cluster_choices), server = TRUE)
+    }
   })
+  
   
   # Select clustering algorithm based on user input
   compute_clusters <- function(graph_comm, algo) {
@@ -181,30 +192,33 @@ server <- function(input, output, session) {
     )
   }
   
-  # Dynamic graph clustering based on selected algorithm
   clustered_data <- reactive({
+    req(input$tabs)
+    
+    algo <- switch(input$tabs %||% "Communication Clusters",
+                   "Communication Clusters" = input$cluster_algo,
+                   "Predominant Topics" = input$clustering_algo_predtopic,
+                   "Walktrap")
+    
     df <- filtered_data()
+    if (nrow(df) == 0) return(NULL)  # nothing to cluster
+    
     edge_list <- df %>%
       filter(sender_type %in% c("Person", "Vessel"), receiver_type %in% c("Person", "Vessel")) %>%
       filter(!is.na(sender_label) & !is.na(receiver_label)) %>%
       count(sender_label, receiver_label, name = "weight")
-    
     if (nrow(edge_list) == 0) return(NULL)
     
     graph_comm <- igraph::graph_from_data_frame(edge_list, directed = TRUE)
+    clusters <- compute_clusters(graph_comm, algo)
     
-    algo <- input$clustering_algo %||% "Walktrap"
-    clusters <- switch(algo,
-                       "Walktrap" = cluster_walktrap(graph_comm),
-                       "Louvain" = cluster_louvain(as.undirected(graph_comm, mode = "collapse")),
-                       "Infomap" = cluster_infomap(graph_comm),
-                       "Label Propagation" = cluster_label_prop(graph_comm),
-                       cluster_walktrap(graph_comm)
-    )
+    if (is.null(clusters$membership)) return(NULL)
     
     df$cluster <- clusters$membership[match(df$sender_label, names(clusters$membership))]
     df
   })
+  
+  
   
   clustered_keywords <- reactive({
     df <- clustered_data()
@@ -223,10 +237,13 @@ server <- function(input, output, session) {
   
   output$network <- renderVisNetwork({
     df <- filtered_data()
+    req(df)
+    algo <- input$cluster_algo %||% "Walktrap"  
     edge_list <- df %>%
       filter(sender_type %in% c("Person", "Vessel"), receiver_type %in% c("Person", "Vessel")) %>%
       filter(!is.na(sender_label) & !is.na(receiver_label)) %>%
       count(sender_label, receiver_label, name = "weight")
+    
     if (nrow(edge_list) == 0) return(NULL)
     
     # Get entity types from filtered data
@@ -249,25 +266,72 @@ server <- function(input, output, session) {
     )
     
     graph_comm <- igraph::graph_from_data_frame(edge_list, directed = TRUE)
-    clusters <- compute_clusters(graph_comm, input$cluster_algo)
-    cluster_ids <- sort(unique(clusters$membership))
-    cluster_map <- setNames(paste0("Cluster ", cluster_ids), cluster_ids)
-    deg_sent <- degree(graph_comm, mode = "out")
-    deg_recv <- degree(graph_comm, mode = "in")
-    nodes_df <- data.frame(
-      id = V(graph_comm)$name, 
-      label = V(graph_comm)$name,
+    if (vcount(graph_comm) == 0) return(NULL)  # stop here if graph has no nodes
+    
+    clusters <- compute_clusters(graph_comm, algo)
+    
+    node_ids <- V(graph_comm)$name
+    cluster_membership <- clusters$membership
+    names(cluster_membership) <- V(graph_comm)$name
+    
+    #print(head(node_ids))
+    #print(head(cluster_membership))
+    #print(names(cluster_membership))
+    
+    deg_sent_full <- degree(graph_comm, mode = "out")
+    deg_recv_full <- degree(graph_comm, mode = "in")
+    
+    # Safe degrees
+    deg_sent_all <- degree(graph_comm, mode = "out")
+    deg_recv_all <- degree(graph_comm, mode = "in")
+    
+    # Align degrees to node_ids
+    deg_sent <- deg_sent_all[node_ids]
+    deg_recv <- deg_recv_all[node_ids]
+    
+    # Replace NAs with 0
+    deg_sent[is.na(deg_sent)] <- 0
+    deg_recv[is.na(deg_recv)] <- 0
+    
+    # Cluster group labels
+    cluster_labels <- cluster_membership[node_ids]
+    group_labels <- paste0("Cluster ", cluster_labels)
+    
+    
+    # FOR DEBUGGING
+    cat("Lengths - node_ids:", length(node_ids), 
+        "deg_sent:", length(deg_sent), 
+        "deg_recv:", length(deg_recv), 
+        "cluster_membership:", length(cluster_membership), "\n")
+    
+    
+    # Create nodes_df safely
+    nodes_df <- tibble(
+      id = node_ids,
+      label = node_ids,
       title = paste0("🟢 Sent: ", deg_sent, "<br>🔵 Received: ", deg_recv),
-      group = paste0("Cluster ", clusters$membership),
+      group = group_labels,
       value = deg_sent + deg_recv
     ) %>%
-      left_join(node_types, by = c("id" = "name")) %>%  # join by id and name columns
+      left_join(node_types, by = c("id" = "name")) %>%
       mutate(
-        shape = shape_map[type] %||% "dot"   # assign shape based on type
+        shape = shape_map[type] %||% "dot"
       )
     
+    selected_clusters <- input$cluster_select
+    selected_nodes <- input$node_select
     
-    edges_df <- data.frame(from = as_edgelist(graph_comm)[, 1], to = as_edgelist(graph_comm)[, 2], arrows = "to")
+    if (!is.null(selected_clusters) && !("All" %in% selected_clusters)) {
+      nodes_df <- nodes_df %>% filter(group %in% selected_clusters)
+    }
+    
+    if (!is.null(selected_nodes) && !("All" %in% selected_nodes)) {
+      nodes_df <- nodes_df %>% filter(id %in% selected_nodes)
+    }
+    
+    edges_df <- edge_list %>%
+      filter(sender_label %in% nodes_df$id & receiver_label %in% nodes_df$id) %>%
+      rename(from = sender_label, to = receiver_label)
   
     # Define legend
     type_legend_nodes <- nodes_df %>%
@@ -296,6 +360,7 @@ server <- function(input, output, session) {
   
   output$keyword_table <- renderDataTable({
     req(input$cluster)
+    
     keywords %>%
       filter(cluster == input$cluster) %>%
       arrange(desc(n)) %>%
@@ -320,6 +385,7 @@ server <- function(input, output, session) {
   
   output$pseudonym_bar <- renderPlot({
     df <- filtered_data()
+    req(df)
     selected_pseudonyms <- c("Mako", "Neptune", "Remora", "Mrs. Money", "The Lookout", "Boss", "The Intern", "The Middleman",
                              "Serenity", "Marlin", "Knowles", "Seawatch", "Osprey", "The Accountant", "Small Fry", "Defender")
     mention_counts <- df %>% pivot_longer(cols = c(sender_label, receiver_label), names_to = "type", values_to = "pseudonym") %>%

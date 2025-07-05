@@ -162,18 +162,12 @@ server <- function(input, output, session) {
     df
   })
   
-  observeEvent(clustered_data(), {
-    updateSelectInput(session, "cluster", choices = sort(unique(clustered_data()$cluster)))
-  }, ignoreInit = TRUE)
-  
   observe({
-    nodes <- sort(unique(c(clustered_data()$sender_label, clustered_data()$receiver_label)))
-    updateSelectizeInput(session, "node_select", choices = nodes, server = TRUE)
-  })
-  
-  observe({
-    clusters <- sort(unique(clustered_data()$cluster))
-    updateSelectizeInput(session, "cluster_select", choices = clusters, server = TRUE)
+    updateSelectInput(session, "cluster", choices = sort(unique(filtered_data()$cluster)))
+    node_choices <- sort(unique(comm_full$sender_label))
+    cluster_choices <- sort(unique(paste0("Cluster ", unique(comm_full$cluster))))
+    updateSelectizeInput(session, "node_select", choices = c("All", node_choices), server = TRUE)
+    updateSelectizeInput(session, "cluster_select", choices = c("All", cluster_choices), server = TRUE)
   })
   
   # Select clustering algorithm based on user input
@@ -285,9 +279,7 @@ server <- function(input, output, session) {
       ) %>%
       select(label, shape, color) %>%
       purrr::transpose()
-    
- 
-    
+
     # visNetwork
     visNetwork(nodes_df, edges_df) %>%
       visOptions(highlightNearest = TRUE) %>%

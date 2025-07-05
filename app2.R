@@ -1,3 +1,4 @@
+# ---- LIBRARIES ----
 library(shiny)
 library(dplyr)
 library(visNetwork)
@@ -7,53 +8,46 @@ library(tidyr)
 library(stringr)
 library(tidytext)
 library(igraph)
+library(lubridate)
+library(shinyWidgets)
 
-# ---- Load and process data ----
-comm_full <- read.csv("data/communications_full.csv", stringsAsFactors = FALSE)
+# ---- LOAD & PROCESS DATA ----
+comm_full <- read.csv("data/communications_full.csv") |>
+  mutate(date = as.Date(date))             # make sure it’s Date, not character
+valid_dates <- sort(unique(comm_full$date))
 
-# Add dummy 'cluster' if missing
+comm_full <- comm_full %>%
+  mutate(
+    datetime = ymd_hms(timestamp),
+    date = as.Date(datetime),
+    hour = hour(datetime),
+    week = paste("Week", isoweek(date) - min(isoweek(date)) + 1)
+  )
+
 if (!"cluster" %in% colnames(comm_full)) {
-  comm_full$cluster <- sample(1:2, nrow(comm_full), replace = TRUE)
+  comm_full$cluster <- sample(1:5, nrow(comm_full), replace = TRUE)
 }
 
-# Create nodes
 nodes <- unique(c(comm_full$sender_label, comm_full$receiver_label)) %>%
   data.frame(id = ., label = .) %>%
   mutate(group = "All")
 
-# Create edges with weights
-edges <- comm_full %>%
-  group_by(from = sender_label, to = receiver_label) %>%
-  summarise(weight = n(), .groups = "drop")
+data("stop_words")
 
-# Create keyword table
+# Create keyword tableMore actions
 keywords <- comm_full %>%
   filter(!is.na(content)) %>%
   unnest_tokens(word, content) %>%
   filter(!word %in% stop_words$word) %>%
   count(cluster, word, sort = TRUE) %>%
-  group_by(cluster) %>%
-  top_n(10, n)
-
-# Create pseudonym mention counts
-mention_counts <- comm_full %>%
-  pivot_longer(cols = c(sender_label, receiver_label), names_to = "type", values_to = "pseudonym") %>%
-  count(pseudonym, name = "count") %>%
-  arrange(desc(count))
-
-# Create heatmap data
-mention_heatmap <- comm_full %>%
-  count(sender = sender_label, pseudonym = receiver_label) %>%
-  complete(sender, pseudonym, fill = list(n = 0)) %>%
-  rename(count = n)
+  group_by(cluster) 
 
 # ---- UI ----
 ui <- fluidPage(
-  titlePanel(""),
-  
+  titlePanel(NULL),
   tags$head(
     tags$style(HTML("
-    /* Data selection input UI 
+      /* Data selection input UI 
     .well {
       background-color: #181d31 !important;
       color: white; 
@@ -92,31 +86,65 @@ ui <- fluidPage(
     .tab-content .vis-network-html-widget {
       margin-top: 20px;
     }
-
     "))
   ),
-  sidebarLayout(
-    sidebarPanel(
-      checkboxGroupInput("weeks", "Select Week(s):", choices = c("Week 1", "Week 2")),
-      dateRangeInput("daterange", "Select Date Range:", start = "2040-10-01", end = "2040-10-14"),
-      sliderInput("hour", "Hour of Day", min = 0, max = 23, value = c(0, 23)),
-      selectInput("individual", "Individual ID Selection", choices = c("", nodes$id)),
-      selectInput("cluster", "Cluster Selection", choices = sort(unique(keywords$cluster)))
+  fluidRow(
+    column(
+      width = 3,
+      wellPanel(
+        h4("Global Filters"),
+        checkboxGroupInput("weeks", "Select Week(s)", choices = c("Week 1", "Week 2")),
+        airDatepickerInput(
+          inputId = "daterange",
+          label = "Select Date Range",
+          range = TRUE,
+          value = c(min(valid_dates), max(valid_dates)),
+          minDate = min(valid_dates),
+          maxDate = max(valid_dates),
+          disabledDates = setdiff(
+            seq(min(valid_dates), max(valid_dates), by = "day"),
+            valid_dates
+          )
+        ),
+        actionButton("update_global", "Update View")  # <-- Added this button
+      ),
+      br(),
+      wellPanel(
+        h4("Local Filters"),
+        conditionalPanel(
+          condition = "$('ul.nav li.active a').text() === 'Communication Clusters'",
+          selectizeInput("node_select", "Select Node ID(s):", choices = NULL, multiple = TRUE),
+          selectizeInput("cluster_select", "Select Cluster(s):", choices = NULL, multiple = TRUE),
+          selectInput("cluster_algo", "Clustering Algorithm:",
+                      choices = c("Walktrap", "Louvain", "Infomap", "Label Propagation"),
+                      selected = "Walktrap")
+        ),
+        conditionalPanel(
+          condition = "$('ul.nav li.active a').text() === 'Pseudonyms General Usage' || $('ul.nav li.active a').text() === 'Pseudonym Specific Mentions'",
+          sliderInput("threshold", "Threshold for Pseudonym Frequency", min = 0, max = 100, value = 0)
+        ),
+        conditionalPanel(
+          condition = "$('ul.nav li.active a').text() === 'Predominant Topics'",
+          selectInput("clustering_algo", "Select Clustering Algorithm",
+                      choices = c("Walktrap", "Louvain", "Infomap", "Label Propagation"),
+                      selected = "Walktrap"),
+          selectInput("cluster", "Select Cluster", choices = NULL)
+        ),
+        actionButton("update", "Update View")
+      )
     ),
-    mainPanel(
+    column(
+      width = 9,
+      h2(""),
+      p(""),
       tabsetPanel(
-        tabPanel("Chart 1: Network",
-                 visNetworkOutput("network")
-        ),
-        tabPanel("Chart 2: Keywords",
-                 dataTableOutput("keyword_table")
-        ),
-        tabPanel("Pseudonyms General Usage",
-                 plotOutput("pseudonym_bar")
-        ),
-        tabPanel("Pseudonym Mentions",
-                 plotOutput("pseudonym_heatmap")
-        )
+        #tabPanel("Communication Clusters", visNetworkOutput("network")),
+        tabPanel("Communication Clusters", 
+                 textOutput("selected_algo"),
+                 visNetworkOutput("network")),
+        tabPanel("Predominant Topics", dataTableOutput("keyword_table")),
+        tabPanel("Pseudonyms General Usage", plotOutput("pseudonym_bar")),
+        tabPanel("Pseudonym Specific Mentions", plotOutput("pseudonym_heatmap"))
       )
     )
   )
@@ -125,45 +153,230 @@ ui <- fluidPage(
 # ---- SERVER ----
 server <- function(input, output, session) {
   
-  output$network <- renderVisNetwork({
-    req(nodes, edges)
-    sel <- input$individual
-    highlight_nodes <- if (sel != "") unique(c(sel, edges$to[edges$from == sel], edges$from[edges$to == sel])) else NULL
-    
-    visNetwork(nodes, edges) %>%
-      visNodes(color = list(highlight = "red")) %>%
-      visEdges(arrows = "to") %>%
-      visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
-      visInteraction(navigationButtons = TRUE) %>%
-      visIgraphLayout()
+  filtered_data <- reactive({
+    df <- comm_full
+    if (!is.null(input$weeks) && length(input$weeks) > 0) {
+      df <- df %>% filter(week %in% input$weeks)
+    }
+    df <- df %>% filter(date >= input$daterange[1], date <= input$daterange[2])
+    df
   })
+  
+  observeEvent(clustered_data(), {
+    updateSelectInput(session, "cluster", choices = sort(unique(clustered_data()$cluster)))
+  }, ignoreInit = TRUE)
+  
+  observe({
+    nodes <- sort(unique(c(clustered_data()$sender_label, clustered_data()$receiver_label)))
+    updateSelectizeInput(session, "node_select", choices = nodes, server = TRUE)
+  })
+  
+  observe({
+    clusters <- sort(unique(clustered_data()$cluster))
+    updateSelectizeInput(session, "cluster_select", choices = clusters, server = TRUE)
+  })
+  
+  # Select clustering algorithm based on user input
+  compute_clusters <- function(graph_comm, algo) {
+    switch(algo,
+           "Walktrap" = cluster_walktrap(graph_comm),
+           "Louvain"  = cluster_louvain(as.undirected(graph_comm, mode = "collapse")),
+           "Infomap"  = cluster_infomap(graph_comm),
+           "Label Propagation" = cluster_label_prop(graph_comm),
+           cluster_walktrap(graph_comm)  # fallback
+    )
+  }
+  
+  # Dynamic graph clustering based on selected algorithm
+  clustered_data <- reactive({
+    df <- filtered_data()
+    edge_list <- df %>%
+      filter(sender_type %in% c("Person", "Vessel"), receiver_type %in% c("Person", "Vessel")) %>%
+      filter(!is.na(sender_label) & !is.na(receiver_label)) %>%
+      count(sender_label, receiver_label, name = "weight")
+    
+    if (nrow(edge_list) == 0) return(NULL)
+    
+    graph_comm <- igraph::graph_from_data_frame(edge_list, directed = TRUE)
+    
+    algo <- input$clustering_algo %||% "Walktrap"
+    clusters <- switch(algo,
+                       "Walktrap" = cluster_walktrap(graph_comm),
+                       "Louvain" = cluster_louvain(as.undirected(graph_comm, mode = "collapse")),
+                       "Infomap" = cluster_infomap(graph_comm),
+                       "Label Propagation" = cluster_label_prop(graph_comm),
+                       cluster_walktrap(graph_comm)
+    )
+    
+    df$cluster <- clusters$membership[match(df$sender_label, names(clusters$membership))]
+    df
+  })
+  
+  clustered_keywords <- reactive({
+    df <- clustered_data()
+    req(df)
+    
+    df %>%
+      filter(!is.na(content), !is.na(cluster)) %>%
+      unnest_tokens(word, content) %>%
+      filter(!word %in% stop_words$word) %>%
+      count(cluster, word, sort = TRUE) %>%
+      group_by(cluster) %>%
+      slice_max(n, n = 10)
+  })
+  
+  
+  
+  output$network <- renderVisNetwork({
+    df <- filtered_data()
+    edge_list <- df %>%
+      filter(sender_type %in% c("Person", "Vessel"), receiver_type %in% c("Person", "Vessel")) %>%
+      filter(!is.na(sender_label) & !is.na(receiver_label)) %>%
+      count(sender_label, receiver_label, name = "weight")
+    if (nrow(edge_list) == 0) return(NULL)
+    
+    # Get entity types from filtered data
+    sender_types <- filtered_data() %>%
+      select(name = sender_label, type = sender_type)
+    
+    receiver_types <- filtered_data() %>%
+      select(name = receiver_label, type = receiver_type)
+    
+    node_types <- bind_rows(sender_types, receiver_types) %>%
+      distinct(name, .keep_all = TRUE)
+    
+    # Shape mapping for entity type
+    shape_map <- c(
+      "Person" = "dot",
+      "Organization" = "box",
+      "Vessel" = "triangle",
+      "Location" = "diamond",
+      "Group" = "square"
+    )
+    
+    graph_comm <- igraph::graph_from_data_frame(edge_list, directed = TRUE)
+    clusters <- compute_clusters(graph_comm, input$cluster_algo)
+    cluster_ids <- sort(unique(clusters$membership))
+    cluster_map <- setNames(paste0("Cluster ", cluster_ids), cluster_ids)
+    deg_sent <- degree(graph_comm, mode = "out")
+    deg_recv <- degree(graph_comm, mode = "in")
+    nodes_df <- data.frame(
+      id = V(graph_comm)$name, 
+      label = V(graph_comm)$name,
+      title = paste0("🟢 Sent: ", deg_sent, "<br>🔵 Received: ", deg_recv),
+      group = paste0("Cluster ", clusters$membership),
+      value = deg_sent + deg_recv
+    ) %>%
+      left_join(node_types, by = c("id" = "name")) %>%  # join by id and name columns
+      mutate(
+        shape = shape_map[type] %||% "dot"   # assign shape based on type
+      )
+    
+    
+    edges_df <- data.frame(from = as_edgelist(graph_comm)[, 1], to = as_edgelist(graph_comm)[, 2], arrows = "to")
+  
+    # Define legend
+    type_legend_nodes <- nodes_df %>%
+      filter(!is.na(shape), !is.na(type)) %>%
+      distinct(type, shape) %>%
+      mutate(
+        label = type,                  # e.g. "Person", "Vessel"
+        color = "gray"                 # color for shapes in legend (neutral)
+      ) %>%
+      select(label, shape, color) %>%
+      purrr::transpose()
+    
+ 
+    
+    # visNetwork
+    visNetwork(nodes_df, edges_df) %>%
+      visOptions(highlightNearest = TRUE) %>%
+      visLegend(addNodes = type_legend_nodes, useGroups = TRUE, position = "left") %>%
+      visPhysics(solver = "forceAtlas2Based", stabilization = TRUE) %>%
+      visInteraction(navigationButtons = TRUE) %>%
+      visLayout(randomSeed = 123)
+  })
+  
+  observeEvent(clustered_keywords(), {
+    updateSelectInput(session, "cluster", choices = sort(unique(clustered_keywords()$cluster)))
+  }, ignoreInit = TRUE)
+  
   
   output$keyword_table <- renderDataTable({
     req(input$cluster)
     keywords %>%
-      filter(cluster == input$cluster)
+      filter(cluster == input$cluster) %>%
+      arrange(desc(n)) %>%
+      mutate(`No.` = row_number()) %>%
+      select(`No.`, Word = word, Frequency = n) %>%
+      datatable(
+        rownames = FALSE,
+        options = list(
+          pageLength = 10,
+          lengthMenu = list(c(10, 20, 30, 40, 50, 60, 70, 80, 90, 100), c('10','20','30','40','50','60','70','80','90','100')),
+          autoWidth = TRUE,
+          columnDefs = list(
+            list(className = 'dt-center', targets = "_all")
+          )
+        ),
+        class = 'stripe hover compact',
+        escape = FALSE
+      )
   })
+  
+  
   
   output$pseudonym_bar <- renderPlot({
-    req(mention_counts)
-    ggplot(mention_counts, aes(x = reorder(pseudonym, count), y = count)) +
-      geom_col(fill = "#2c7fb8") +
+    df <- filtered_data()
+    selected_pseudonyms <- c("Mako", "Neptune", "Remora", "Mrs. Money", "The Lookout", "Boss", "The Intern", "The Middleman",
+                             "Serenity", "Marlin", "Knowles", "Seawatch", "Osprey", "The Accountant", "Small Fry", "Defender")
+    mention_counts <- df %>% pivot_longer(cols = c(sender_label, receiver_label), names_to = "type", values_to = "pseudonym") %>%
+      count(pseudonym, name = "count")
+    filtered_counts <- mention_counts %>%
+      filter(pseudonym %in% selected_pseudonyms & count >= input$threshold) %>%
+      arrange(desc(count)) %>%
+      mutate(pseudonym = factor(pseudonym, levels = rev(pseudonym)))
+    ggplot(filtered_counts, aes(x = pseudonym, y = count, fill = count)) +
+      geom_col() +
+      geom_text(aes(label = count), hjust = -0.3, size = 4.2) +
       coord_flip() +
-      labs(title = "Total Mentions of Identified and Suspected Pseudonyms",
-           x = "Pseudonym", y = "Frequency") +
-      theme_minimal()
-  })
+      scale_fill_gradient(low = "#deebf7", high = "#08306b") +
+      labs(x = "Pseudonym", y = "Frequency") +
+      theme_minimal(base_size = 14) +
+      theme(legend.position = "none", plot.margin = margin(10, 10, 10, 10))
+  }, height = 600, width = 900)
   
   output$pseudonym_heatmap <- renderPlot({
-    req(mention_heatmap)
-    ggplot(mention_heatmap, aes(x = pseudonym, y = sender, fill = count)) +
+    df <- filtered_data()
+    selected_pseudonyms <- c("The Lookout", "Mrs. Money", "Small Fry", "The Intern", "Remora", "Osprey", "Defender", "Mako",
+                             "Knowles", "Neptune", "The Accountant", "The Middleman", "Marlin", "Boss", "Serenity", "Rodriguez")
+    mention_heatmap <- df %>% count(sender = sender_label, pseudonym = receiver_label) %>% complete(sender, pseudonym, fill = list(n = 0)) %>% rename(count = n)
+    df_filtered <- mention_heatmap %>%
+      filter(pseudonym %in% selected_pseudonyms & count >= input$threshold)
+    df_filtered$pseudonym <- factor(df_filtered$pseudonym, levels = selected_pseudonyms)
+    ggplot(df_filtered, aes(x = pseudonym, y = sender, fill = count)) +
       geom_tile(color = "white") +
-      geom_text(aes(label = ifelse(count > 0, count, "")), size = 3) +
+      geom_text(aes(label = ifelse(count > 0, count, "")), size = 3.5) +
       scale_fill_gradient(low = "#e0ecf4", high = "#0868ac") +
-      labs(title = "Pseudonym Mentions by Sender", x = "Pseudonym", y = "Sender") +
-      theme_minimal()
-  })
+      labs(x = "Pseudonym", y = "Sender") +
+      theme_minimal(base_size = 14) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.margin = margin(10, 10, 10, 10), legend.position = "none")
+  }, height = 700, width = 1100)
 }
 
 # ---- RUN APP ----
 shinyApp(ui = ui, server = server)
+
+
+
+
+
+
+
+
+
+
+
+
+
+

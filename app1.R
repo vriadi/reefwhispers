@@ -4,15 +4,59 @@ library(dplyr)
 library(ggplot2)
 library(visNetwork)
 library(DT)
+library(cronologia)
 
 comm_full <- read.csv("data/communications_full.csv") |>
   mutate(date = as.Date(date))             # make sure it’s Date, not character
 
 valid_dates <- sort(unique(comm_full$date))
 
-
 ui <- fluidPage(
   titlePanel(""),
+  tags$head(
+    tags$style(HTML("
+    /* Data selection input UI 
+    .well {
+      background-color: #181d31 !important;
+      color: white; 
+    }*/
+    
+    /* Bold and pink for active tab */
+    .nav-tabs > li.active > a, 
+    .nav-tabs > li.active > a:focus, 
+    .nav-tabs > li.active > a:hover {
+      background-color: #f6e3f3 !important;  /* Light pink */
+      font-weight: bold !important;
+      color: black !important;
+    }
+
+    /* Inactive tabs style*/
+    .nav-tabs > li > a {
+      background-color: #f9f9f9;
+      color: black;
+      font-weight: bold !important;
+    }
+
+    /* Hover style */
+    .nav-tabs > li > a:hover {
+      background-color: #f1f1f1;
+      color: #333;
+    }
+    
+    /* Add spacing between tabs and content */
+    .tab-content .shiny-plot-output,
+    .tab-content .datatables,
+    .tab-content .vis-network {
+      margin-top: 20px;
+    }
+    
+    /* Add spacing below the tab bar, including 'Select by id' */
+    .tab-content .vis-network-html-widget {
+      margin-top: 20px;
+    }
+
+    "))
+  ),
   
   sidebarLayout(
     sidebarPanel(
@@ -81,7 +125,8 @@ ui <- fluidPage(
         tabPanel("Temporal Pattern", plotOutput("time_plot")),
         tabPanel("Heatmap",        plotOutput("heatmap_plot")),
         tabPanel("Communication Network", visNetworkOutput("net_plot")),
-        tabPanel("Receipts", dataTableOutput("comm_table"))
+        tabPanel("Receipts", dataTableOutput("comm_table")),
+        tabPanel("Communication Timeline", uiOutput("cronologia"))
       )
     )
   )
@@ -120,7 +165,10 @@ server <- function(input, output, session) {
       geom_line(color = "#0072B2", size = 1) +
       facet_wrap(~ week_label, scales = "free_x", ncol = 1) +
       labs(title = "Daily Communication Volume per Week", x = "Date", y = "Messages") +
-      theme_minimal()
+      theme_minimal()+
+      theme(
+        plot.title = element_text(face = "bold", size = 18)  
+      )
   })
   
   # ---- Heatmap Plot (Weekday vs Hour) ----
@@ -133,7 +181,10 @@ server <- function(input, output, session) {
       scale_fill_viridis_c() +
       labs(title = "Communication Heatmap", x = "Hour", y = "Weekday", fill = "Messages") +
       facet_wrap(~ week_label, ncol = 1) +
-      theme_minimal()
+      theme_minimal()+
+      theme(
+        plot.title = element_text(face = "bold", size = 18)  
+      )
   })
   
   # ---- Network Graph ----
@@ -144,29 +195,103 @@ server <- function(input, output, session) {
     
     if (nrow(df) == 0) return(NULL)
     
-    # Create node list with group for coloring
+    # Get entity types from filtered data
+    sender_types <- filtered_data() %>%
+      select(name = sender_label, type = sender_type)
+    
+    receiver_types <- filtered_data() %>%
+      select(name = receiver_label, type = receiver_type)
+    
+    node_types <- bind_rows(sender_types, receiver_types) %>%
+      distinct(name, .keep_all = TRUE)
+    
+    # Shape mapping for entity type
+    shape_map <- c(
+      "Person" = "dot",
+      "Organization" = "box",
+      "Vessel" = "triangle",
+      "Location" = "diamond",
+      "Group" = "square"
+    )
+    
+    # Create node list with the entity shape mapped
     graph_nodes <- tibble(name = unique(c(df$sender_label, df$receiver_label))) %>%
-      mutate(id = name, label = name, group = name)  # group = name → each node colored uniquely
+      left_join(node_types, by = "name") %>%
+      mutate(
+        id = name,
+        label = name,
+        group = type,
+        shape = shape_map[type] %||% "dot"  # fallback to dot if NA
+      )
     
     # Rename edge columns for visNetwork
     graph_edges <- df %>%
       rename(from = sender_label, to = receiver_label)
     
+    # Define legend
+    legend_nodes <- graph_nodes %>%
+      filter(!is.na(group)) %>%
+      distinct(group, shape) %>%
+      mutate(
+        label = group,
+        color = case_when(
+          group == "Person" ~ "#A0C1F7",
+          group == "Vessel" ~ "#FFFF54",
+          group == "Organization" ~ "#EB8584",
+          group == "Location" ~ "#94DF5C",
+          group == "Group" ~ "#DD83EE",
+          TRUE ~ "gray"
+        )
+      ) %>%
+      select(label, shape, color) %>%
+      purrr::transpose()
+    
+    # visNetwork
     visNetwork(nodes = graph_nodes, edges = graph_edges) %>%
       visEdges(arrows = "to") %>%
       visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
       visLayout(randomSeed = 123) %>%
       visPhysics(stabilization = TRUE) %>%
       visInteraction(navigationButtons = TRUE) %>%
-      visLegend()
+      visLegend(useGroups = FALSE, addNodes = legend_nodes)
+    
+    
   })
+  
   
   # ---- Data Table ----
   output$comm_table <- renderDataTable({
     filtered_data() %>%
       datatable(options = list(pageLength = 10))
   })
+  
+  # ---- Cronologia ----
+  output$cronologia <- renderUI({
+    df <- filtered_data()
+    
+    if (nrow(df) == 0) {
+      return(HTML("<p>No messages found for the current filters.</p>"))
+    }
+    
+    df <- df %>%
+      mutate(
+        timestamp = as.POSIXct(date),  
+        timestamp_desc = format(timestamp, "%A, %B %d %Y, %H:%M"),
+        content = as.character(content)    # Make sure content is character
+      )
+    
+    create_tml(
+      df = df,
+      smr = "timestamp_desc",
+      dsc = "content"
+    )
+  })
+  
+  
 }
+
+  
+  
 
 
 # ---- Run App ----

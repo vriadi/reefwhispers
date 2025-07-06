@@ -14,6 +14,49 @@ df <- read_excel("data/Nadia Conti_copy.xlsx") %>% clean_names()
 # UI
 ui <- fluidPage(
   titlePanel("Overview - Nadia's Messages Activity and Relationship Network"),
+  tags$head(
+    tags$style(HTML("
+      /* Data selection input UI 
+    .well {
+      background-color: #181d31 !important;
+      color: white; 
+    }*/
+    
+    /* Bold and pink for active tab */
+    .nav-tabs > li.active > a, 
+    .nav-tabs > li.active > a:focus, 
+    .nav-tabs > li.active > a:hover {
+      background-color: #f6e3f3 !important;  /* Light pink */
+      font-weight: bold !important;
+      color: black !important;
+    }
+
+    /* Inactive tabs style*/
+    .nav-tabs > li > a {
+      background-color: #f9f9f9;
+      color: black;
+      font-weight: bold !important;
+    }
+
+    /* Hover style */
+    .nav-tabs > li > a:hover {
+      background-color: #f1f1f1;
+      color: #333;
+    }
+    
+    /* Add spacing between tabs and content */
+    .tab-content .shiny-plot-output,
+    .tab-content .datatables,
+    .tab-content .vis-network {
+      margin-top: 20px;
+    }
+    
+    /* Add spacing below the tab bar, including 'Select by id' */
+    .tab-content .vis-network-html-widget {
+      margin-top: 20px;
+    }
+    "))
+  ),
   fluidRow(
     column(3, wellPanel(
       checkboxGroupInput("weeks", "Select Week(s)",
@@ -140,7 +183,27 @@ server <- function(input, output, session) {
         id = name,
         label = name
       ) %>%
-      replace_na(list(group = "Unknown"))
+      replace_na(list(group = "Unknown"))%>%
+      mutate(
+        shape = case_when(
+          group == "Nadia Conti" ~ "star",
+          group == "Person" ~ "dot",
+          group == "Organization" ~ "ellipse",
+          group == "Vessel" ~ "diamond",
+          group == "Location" ~ "triangle",
+          TRUE ~ "circle"
+        ),
+        color = case_when(
+          group == "Nadia Conti" ~ "#bf0a30",
+          group == "Person" ~ "#6baed6",
+          group == "Organization" ~ "#ffd700",
+          group == "Vessel" ~ "#fb6a4a",
+          group == "Location" ~ "#74c476",
+          TRUE ~ "#c0c0c0"
+        )
+        )
+    
+    print(nadia_nodes)
     
     visNetwork(nodes = nadia_nodes, edges = nadia_edges) %>%
       visEdges(arrows = "to") %>%
@@ -148,7 +211,11 @@ server <- function(input, output, session) {
       visLayout(randomSeed = 123) %>%
       visPhysics(stabilization = TRUE) %>%
       visInteraction(navigationButtons = TRUE) %>%
-      visLegend()
+      visLegend(useGroups = FALSE, addNodes = data.frame(
+        label = c("Nadia Conti","Person", "Organization", "Vessel", "Location"),
+        shape = c("star","dot", "ellipse", "diamond", "triangle"),
+        color = c("#bf0a30","#6baed6", "#ffd700", "#fb6a4a", "#74c476")
+      ))
   })
   
   # Relationship Network Tab
@@ -167,6 +234,7 @@ server <- function(input, output, session) {
       distinct(id, .keep_all = TRUE) %>%
       mutate(
         shape = case_when(
+          label == "Nadia Conti" & group == "Person" ~ "star",
           group == "Person" ~ "dot",
           group == "Organization" ~ "ellipse",
           group == "Vessel" ~ "diamond",
@@ -175,6 +243,7 @@ server <- function(input, output, session) {
           TRUE ~ "circle"
         ),
         color = case_when(
+          group == "Person" & label == "Nadia Conti" ~ "#bf0a30",
           group == "Person" ~ "#6baed6",
           group == "Organization" ~ "#ffd700",
           group == "Vessel" ~ "#fb6a4a",
@@ -184,6 +253,8 @@ server <- function(input, output, session) {
         ),
         title = paste0("<b>", label, "</b><br>Type: ", group)
       )
+    
+    print(nodes)
     
     # Update dropdown with unique node labels
     updateSelectInput(session, "selected_node", choices = sort(unique(nodes$label)))
@@ -212,10 +283,10 @@ server <- function(input, output, session) {
       visOptions(highlightNearest = TRUE, nodesIdSelection = FALSE) %>%
       visPhysics(solver = "forceAtlas2Based", stabilization = TRUE) %>%
       visLayout(randomSeed = 11) %>%
-      visLegend(addNodes = data.frame(
-        label = c("Person", "Organization", "Vessel", "Location", "Relationship"),
-        shape = c("dot", "ellipse", "diamond", "triangle", "box"),
-        color = c("#6baed6", "#ffd700", "#fb6a4a", "#74c476", "#d07be5")
+      visLegend(useGroups = FALSE, addNodes = data.frame(
+        label = c("Nadia Conti","Person", "Organization", "Vessel", "Location", "Relationship"),
+        shape = c("star","dot", "ellipse", "diamond", "triangle", "box"),
+        color = c("#bf0a30","#6baed6", "#ffd700", "#fb6a4a", "#74c476", "#d07be5")
       ))
   })
   

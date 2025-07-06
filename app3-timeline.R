@@ -34,6 +34,49 @@ classify_event_primary <- function(text) {
 # UI
 ui <- fluidPage(
   titlePanel("Nadia's Timeline of Events & Operational Focus"),
+  tags$head(
+    tags$style(HTML("
+      /* Data selection input UI 
+    .well {
+      background-color: #181d31 !important;
+      color: white; 
+    }*/
+    
+    /* Bold and pink for active tab */
+    .nav-tabs > li.active > a, 
+    .nav-tabs > li.active > a:focus, 
+    .nav-tabs > li.active > a:hover {
+      background-color: #f6e3f3 !important;  /* Light pink */
+      font-weight: bold !important;
+      color: black !important;
+    }
+
+    /* Inactive tabs style*/
+    .nav-tabs > li > a {
+      background-color: #f9f9f9;
+      color: black;
+      font-weight: bold !important;
+    }
+
+    /* Hover style */
+    .nav-tabs > li > a:hover {
+      background-color: #f1f1f1;
+      color: #333;
+    }
+    
+    /* Add spacing between tabs and content */
+    .tab-content .shiny-plot-output,
+    .tab-content .datatables,
+    .tab-content .vis-network {
+      margin-top: 20px;
+    }
+    
+    /* Add spacing below the tab bar, including 'Select by id' */
+    .tab-content .vis-network-html-widget {
+      margin-top: 20px;
+    }
+    "))
+  ),
   tabsetPanel(
     tabPanel("Operational Focus Timeline",
              fluidPage(
@@ -69,8 +112,8 @@ server <- function(input, output, session) {
     df_focus <- tibble::tibble(
       Date = factor(c("Oct 8", "Oct 9", "Oct 10", "Oct 11", "Oct 12"),
                     levels = c("Oct 8", "Oct 9", "Oct 10", "Oct 11", "Oct 12")),
-      Focus = c("Execution Planning", "Escalation Response", "Surveillance & Legal Framing",
-                "Disruption & Realignment", "Administrative Closure"),
+      Focus = c("Execution\nPlanning", "Escalation\nResponse", "Surveillance &\nLegal Framing",
+                "Disruption &\nRealignment", "Administrative\nClosure"),
       Description = c(
         "🔧 Oct 8: Execution planning started with preparation and set-up actions. Not much complexity yet.",
         "💬 Oct 9: Multi-faceted coordination with urgency, contingency, engineering work & admin verification.",

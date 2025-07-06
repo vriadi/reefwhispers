@@ -5,6 +5,7 @@ library(ggplot2)
 library(visNetwork)
 library(DT)
 library(cronologia)
+library(igraph)
 
 comm_full <- read.csv("data/communications_full.csv") |>
   mutate(date = as.Date(date))             # make sure it’s Date, not character
@@ -124,7 +125,15 @@ ui <- fluidPage(
       tabsetPanel(
         tabPanel("Temporal Pattern", plotOutput("time_plot")),
         tabPanel("Heatmap",        plotOutput("heatmap_plot")),
-        tabPanel("Communication Network", visNetworkOutput("net_plot")),
+        tabPanel("Communication Network",
+                 h4("Network Graph"),
+                 visNetworkOutput("net_plot"),
+                 br(),br(),br(),
+                 h4("Centrality Measure"),
+                 selectInput("centrality_type", "Select Centrality Measure",
+                             choices = c("PageRank", "Betweenness", "Degree"),
+                             selected = "PageRank"),
+                 dataTableOutput("centrality_table")),
         tabPanel("Receipts", dataTableOutput("comm_table")),
         tabPanel("Communication Timeline", uiOutput("cronologia"))
       )
@@ -162,7 +171,7 @@ server <- function(input, output, session) {
       count(week_label, date)
     
     ggplot(df, aes(x = date, y = n, group = week_label)) +
-      geom_line(color = "#0072B2", size = 1) +
+      geom_line(color = "#0072B2", linewidth = 1) +
       facet_wrap(~ week_label, scales = "free_x", ncol = 1) +
       labs(title = "Daily Communication Volume per Week", x = "Date", y = "Messages") +
       theme_minimal()+
@@ -258,6 +267,72 @@ server <- function(input, output, session) {
     
   })
   
+  # ---- Centrality Measures ----
+  centralitymeasure_df <- reactive({
+    df <- filtered_data() %>%
+      filter(!is.na(sender_label), !is.na(receiver_label)) %>%
+      count(sender_label, receiver_label, name = "value")
+    
+    if (nrow(df) == 0) return(NULL)
+    
+    sender_types <- filtered_data() %>%
+      select(name = sender_label, type = sender_type)
+    
+    receiver_types <- filtered_data() %>%
+      select(name = receiver_label, type = receiver_type)
+    
+    node_types <- bind_rows(sender_types, receiver_types) %>%
+      distinct(name, .keep_all = TRUE)
+    
+    graph_nodes <- tibble(name = unique(c(df$sender_label, df$receiver_label))) %>%
+      left_join(node_types, by = "name") %>%
+      mutate(id = name, label = name, group = type)
+    
+    graph_edges <- df %>%
+      rename(from = sender_label, to = receiver_label, weight = value)
+    
+    g <- graph_from_data_frame(d = graph_edges, vertices = graph_nodes, directed = TRUE)
+    
+    V(g)$pagerank <- page_rank(g)$vector
+    V(g)$betweenness <- betweenness(g)
+    V(g)$degree <- degree(g)
+    
+    # Ego graph for Nadia
+    if (!"Nadia Conti" %in% V(g)$name) return(NULL)
+    
+    ego_graph <- make_ego_graph(g, order = 2, nodes = which(V(g)$name == "Nadia Conti"))[[1]]
+    return(ego_graph)
+  })
+  
+  centrality_table_data <- reactive({
+    g <- centralitymeasure_df()
+    if (is.null(g)) return(NULL)
+    
+    df <- data.frame(
+      label = V(g)$name,
+      type = V(g)$group
+    )
+    
+    if (input$centrality_type == "PageRank") {
+      df$score <- round(V(g)$pagerank, 4)
+    } else if (input$centrality_type == "Betweenness") {
+      df$score <- round(V(g)$betweenness, 2)
+    } else if (input$centrality_type == "Degree") {
+      df$score <- V(g)$degree
+    }
+    
+    df %>% arrange(desc(score))
+  })
+  
+  output$centrality_table <- renderDataTable({
+    df <- centrality_table_data()
+    if (is.null(df)) return(NULL)
+    
+    datatable(df, 
+              colnames = c("Label", "Type", input$centrality_type),
+              caption = paste(input$centrality_type, "Centrality Measure")
+    )
+  })
   
   # ---- Data Table ----
   output$comm_table <- renderDataTable({

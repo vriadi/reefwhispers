@@ -185,6 +185,16 @@ server <- function(input, output, session) {
     }
   })
   
+  compute_clusters <- function(graph, algorithm = "Walktrap") {
+    switch(algorithm,
+           "Walktrap" = cluster_walktrap(graph),
+           "Louvain" = cluster_louvain(as.undirected(graph)),
+           "Infomap" = cluster_infomap(graph),
+           "Label Propagation" = cluster_label_prop(graph),
+           cluster_walktrap(graph)  # default
+    )
+  }
+  
   output$network <- renderVisNetwork({
     df <- filtered_data()
     req(df)

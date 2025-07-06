@@ -150,30 +150,104 @@ ui <- fluidPage(
 
 # ---- SERVER ----
 server <- function(input, output, session) {
+  # Store global filter selections
+  filters <- reactiveValues(
+    week = NULL,
+    date_range = NULL
+  )
   
+  # Store local filter selections (for Communication Clusters tab)
+  local_filters <- reactiveValues(
+    cluster_algo = "Walktrap",
+    cluster_select = NULL,
+    node_select = NULL
+  )
+  
+  # Trigger: Update filter values when button is clicked
+  observeEvent(input$update_global, {
+    filters$week <- input$weeks
+    filters$date_range <- input$daterange
+  })
+  
+  # Trigger: Update local filter values when Local "Update View" is clicked
+  observeEvent(input$update, {
+    local_filters$cluster_algo <- input$cluster_algo
+    local_filters$cluster_select <- input$cluster_select
+    local_filters$node_select <- input$node_select
+  })
+  
+  # Use values from filters (not direct input) so it's only updated when "Update View" is clicked
   filtered_data <- reactive({
     df <- comm_full
-    if (!is.null(input$weeks) && length(input$weeks) > 0) {
-      df <- df %>% filter(week %in% input$weeks)
+    
+    if (!is.null(filters$week) && length(filters$week) > 0) {
+      df <- df %>% filter(week %in% filters$week)
     }
-    df <- df %>% filter(date >= input$daterange[1], date <= input$daterange[2])
+    
+    if (!is.null(filters$date_range)) {
+      df <- df %>% filter(date >= filters$date_range[1], date <= filters$date_range[2])
+    }
+    
     df
   })
   
+  observeEvent(input$update, {
+    req(input$tabs == "Predominant Topics")
+    
+    df <- filtered_data()
+    if (nrow(df) == 0) return(NULL)
+    
+    edges <- df %>%
+      filter(!is.na(sender_label) & !is.na(receiver_label)) %>%
+      count(sender_label, receiver_label, name = "weight")
+    
+    if (nrow(edges) == 0) return(NULL)
+    
+    g <- igraph::graph_from_data_frame(edges, directed = TRUE)
+    algo <- input$clustering_algo_predtopic
+    
+    clusters <- switch(algo,
+                       "Walktrap" = cluster_walktrap(g),
+                       "Louvain" = cluster_louvain(as.undirected(g)),
+                       "Infomap" = cluster_infomap(g),
+                       "Label Propagation" = cluster_label_prop(g),
+                       cluster_walktrap(g)
+    )
+    
+    cluster_membership <- clusters$membership
+    if (is.null(cluster_membership)) return(NULL)
+    
+    cluster_choices <- sort(unique(cluster_membership))
+    updateSelectInput(session, "cluster", choices = cluster_choices)
+  })
+  
   observe({
-    req(filtered_data())
+    req(input$tabs == "Communication Clusters")
+    df <- filtered_data()
+    req(nrow(df) > 0)
     
-    updateSelectInput(session, "cluster", choices = sort(unique(filtered_data()$cluster)))
+    edge_list <- df %>%
+      filter(sender_type %in% c("Person", "Vessel"), receiver_type %in% c("Person", "Vessel")) %>%
+      filter(!is.na(sender_label) & !is.na(receiver_label)) %>%
+      count(sender_label, receiver_label, name = "weight")
     
-    req(input$tabs)  # <- Add this line to guard the if-statement
+    if (nrow(edge_list) == 0) return()
     
-    if (input$tabs == "Communication Clusters") {
-      node_choices <- sort(unique(filtered_data()$sender_label))
-      cluster_choices <- sort(unique(paste0("Cluster ", filtered_data()$cluster)))
-      updateSelectizeInput(session, "node_select", choices = c("All", node_choices), server = TRUE)
-      updateSelectizeInput(session, "cluster_select", choices = c("All", cluster_choices), server = TRUE)}
-      
-    })
+    graph_comm <- igraph::graph_from_data_frame(edge_list, directed = TRUE)
+    if (vcount(graph_comm) == 0) return()
+    
+    clusters <- compute_clusters(graph_comm, input$cluster_algo)
+    
+    node_ids <- V(graph_comm)$name
+    cluster_membership <- clusters$membership
+    names(cluster_membership) <- node_ids
+    
+    cluster_labels <- paste0("Cluster ", sort(unique(cluster_membership)))
+    node_choices <- sort(unique(df$sender_label))
+    
+    updateSelectizeInput(session, "node_select", choices = c("All", node_choices), server = TRUE)
+    updateSelectizeInput(session, "cluster_select", choices = c("All", cluster_labels), server = TRUE)
+  })
   
   observeEvent({
     input$tabs
@@ -198,7 +272,7 @@ server <- function(input, output, session) {
   output$network <- renderVisNetwork({
     df <- filtered_data()
     req(df)
-    algo <- input$cluster_algo %||% "Walktrap"  
+    algo <- local_filters$cluster_algo %||% "Walktrap"  
     edge_list <- df %>%
       filter(sender_type %in% c("Person", "Vessel"), receiver_type %in% c("Person", "Vessel")) %>%
       filter(!is.na(sender_label) & !is.na(receiver_label)) %>%
@@ -279,8 +353,8 @@ server <- function(input, output, session) {
         shape = shape_map[type] %||% "dot"
       )
     
-    selected_clusters <- input$cluster_select
-    selected_nodes <- input$node_select
+    selected_clusters <- local_filters$cluster_select
+    selected_nodes <- local_filters$node_select
     
     if (!is.null(selected_clusters) && !("All" %in% selected_clusters)) {
       nodes_df <- nodes_df %>% filter(group %in% selected_clusters)
@@ -293,7 +367,7 @@ server <- function(input, output, session) {
     edges_df <- edge_list %>%
       filter(sender_label %in% nodes_df$id & receiver_label %in% nodes_df$id) %>%
       rename(from = sender_label, to = receiver_label)
-  
+    
     # Define legend
     type_legend_nodes <- nodes_df %>%
       filter(!is.na(shape), !is.na(type)) %>%
@@ -304,7 +378,7 @@ server <- function(input, output, session) {
       ) %>%
       select(label, shape, color) %>%
       purrr::transpose()
-
+    
     # visNetwork
     visNetwork(nodes_df, edges_df) %>%
       visOptions(highlightNearest = TRUE) %>%
@@ -317,7 +391,7 @@ server <- function(input, output, session) {
   output$cluster_members_table <- renderDataTable({
     df <- filtered_data()
     req(df)
-    algo <- input$cluster_algo %||% "Walktrap"  
+    algo <- local_filters$cluster_algo %||% "Walktrap"  
     edge_list <- df %>%
       filter(sender_type %in% c("Person", "Vessel"), receiver_type %in% c("Person", "Vessel")) %>%
       filter(!is.na(sender_label) & !is.na(receiver_label)) %>%
@@ -334,7 +408,7 @@ server <- function(input, output, session) {
     
     node_types <- bind_rows(sender_types, receiver_types) %>%
       distinct(name, .keep_all = TRUE)
-
+    
     
     graph_comm <- igraph::graph_from_data_frame(edge_list, directed = TRUE)
     if (vcount(graph_comm) == 0) return(NULL)  # stop here if graph has no nodes
@@ -387,8 +461,8 @@ server <- function(input, output, session) {
     ) %>%
       left_join(node_types, by = c("id" = "name"))
     
-    selected_clusters <- input$cluster_select
-    selected_nodes <- input$node_select
+    selected_clusters <- local_filters$cluster_select
+    selected_nodes <- local_filters$node_select
     
     if (!is.null(selected_clusters) && !("All" %in% selected_clusters)) {
       nodes_df <- nodes_df %>% filter(group %in% selected_clusters)
@@ -408,6 +482,7 @@ server <- function(input, output, session) {
         rownames = FALSE,
         options = list(
           pageLength = 5,
+          lengthChange = FALSE,
           autoWidth = TRUE,
           columnDefs = list(list(className = 'dt-left', targets = "_all"))
         ),
@@ -598,17 +673,3 @@ server <- function(input, output, session) {
 
 # ---- RUN APP ----
 shinyApp(ui = ui, server = server)
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -138,7 +138,7 @@ ui <- fluidPage(
                  textOutput("selected_algo"),
                  visNetworkOutput("network"),
                  br(),
-                 h4("Cluster Members Overview"),
+                 h4("Cluster Members"),
                  dataTableOutput("cluster_members_table")),
         tabPanel("Predominant Topics", dataTableOutput("keyword_table")),
         tabPanel("Pseudonyms General Usage", plotOutput("pseudonym_bar")),
@@ -173,91 +173,17 @@ server <- function(input, output, session) {
       updateSelectizeInput(session, "node_select", choices = c("All", node_choices), server = TRUE)
       updateSelectizeInput(session, "cluster_select", choices = c("All", cluster_choices), server = TRUE)}
       
-  if (input$tabs == "Predominant Topics") {
-    
-    cluster_choices <- sort(unique(paste0("cluster ", filtered_data()$cluster)))
-    updateSelectInput(session, "cluster", choices = c("All", cluster_choices))
+    })
+  
+  observeEvent({
+    input$tabs
+    filtered_data()
+  }, {
+    if (input$tabs == "Predominant Topics") {
+      cluster_choices <- sort(unique(filtered_data()$cluster))
+      updateSelectInput(session, "cluster", choices = cluster_choices)
     }
-      })
-
-  
-  # Select clustering algorithm based on user input
-  compute_clusters <- function(graph_comm, algo) {
-    switch(algo,
-           "Walktrap" = cluster_walktrap(graph_comm),
-           "Louvain"  = cluster_louvain(as.undirected(graph_comm, mode = "collapse")),
-           "Infomap"  = cluster_infomap(graph_comm),
-           "Label Propagation" = cluster_label_prop(graph_comm),
-           cluster_walktrap(graph_comm)  # fallback
-    )
-  }
-  
-  clustered_data <- reactive({
-    req(input$tabs)
-    
-    algo <- switch(input$tabs %||% "Communication Clusters",
-                   "Communication Clusters" = input$cluster_algo,
-                   "Predominant Topics" = input$clustering_algo_predtopic,
-                   "Walktrap")
-    
-    df <- filtered_data() %>%
-      filter(!is.na(content)) %>%
-      group_by(sender_label) %>%
-      summarise(content = paste(content, collapse = " ")) %>%
-      ungroup()
-    
-    print(head(df))
-    
-    edge_list <- df %>%
-      #filter(sender_type %in% c("Person", "Vessel"), receiver_type %in% c("Person", "Vessel")) %>%
-      filter(!is.na(sender_label)) %>%
-      count(sender_label, name = "weight")
-    if (nrow(edge_list) == 0) return(NULL)
-    
-    graph_comm <- igraph::graph_from_data_frame(edge_list, directed = TRUE)
-    clusters <- compute_clusters(graph_comm, algo)
-    
-    if (is.null(clusters$membership)) return(NULL)
-    
-    df$cluster <- clusters$membership[match(df$sender_label, names(clusters$membership))]
-    df
   })
-  
-  observe({
-    updateSelectInput(session, "cluster", choices = sort(unique(filtered_data()$cluster)))
-    node_choices <- sort(unique(comm_full$sender_label))
-    cluster_choices <- sort(unique(paste0("Cluster ", unique(comm_full$cluster))))
-    updateSelectizeInput(session, "node_select", choices = c("All", node_choices), server = TRUE)
-    updateSelectizeInput(session, "cluster_select", choices = c("All", cluster_choices), server = TRUE)
-  })
-  
-  
-  clustered_keywords <- reactive({
-    df <- clustered_data()
-    req(df)
-    
-    df %>%
-      filter(!is.na(content), !is.na(cluster)) %>%
-      unnest_tokens(word, content) %>%
-      filter(!word %in% stop_words$word) %>%
-      count(cluster, word, sort = TRUE) %>%
-      group_by(cluster) %>%
-      slice_max(n, n = 10)
-  })
-  
-  
-  observeEvent(clustered_keywords(), {
-    updateSelectInput(session, "cluster", choices = sort(unique(clustered_keywords()$cluster)))
-  }, ignoreInit = TRUE)
-  
-  # Create keyword tableMore actions
-  keywords <- comm_full %>%
-    filter(!is.na(content)) %>%
-    unnest_tokens(word, content) %>%
-    filter(!word %in% stop_words$word) %>%
-    count(cluster, word, sort = TRUE) %>%
-    group_by(cluster) %>%
-    top_n(10, n)
   
   output$network <- renderVisNetwork({
     df <- filtered_data()
@@ -298,7 +224,7 @@ server <- function(input, output, session) {
     cluster_membership <- clusters$membership
     names(cluster_membership) <- V(graph_comm)$name
     
-    #print(head(node_ids))
+    #print(node_ids)
     #print(head(cluster_membership))
     #print(names(cluster_membership))
     
@@ -379,31 +305,95 @@ server <- function(input, output, session) {
   })
   
   output$cluster_members_table <- renderDataTable({
-    df <- clustered_data()
+    df <- filtered_data()
     req(df)
+    algo <- input$cluster_algo %||% "Walktrap"  
+    edge_list <- df %>%
+      filter(sender_type %in% c("Person", "Vessel"), receiver_type %in% c("Person", "Vessel")) %>%
+      filter(!is.na(sender_label) & !is.na(receiver_label)) %>%
+      count(sender_label, receiver_label, name = "weight")
     
-    # Get node filters
+    if (nrow(edge_list) == 0) return(NULL)
+    
+    # Get entity types from filtered data
+    sender_types <- filtered_data() %>%
+      select(name = sender_label, type = sender_type)
+    
+    receiver_types <- filtered_data() %>%
+      select(name = receiver_label, type = receiver_type)
+    
+    node_types <- bind_rows(sender_types, receiver_types) %>%
+      distinct(name, .keep_all = TRUE)
+
+    
+    graph_comm <- igraph::graph_from_data_frame(edge_list, directed = TRUE)
+    if (vcount(graph_comm) == 0) return(NULL)  # stop here if graph has no nodes
+    
+    clusters <- compute_clusters(graph_comm, algo)
+    
+    node_ids <- V(graph_comm)$name
+    cluster_membership <- clusters$membership
+    names(cluster_membership) <- V(graph_comm)$name
+    
+    #print(node_ids)
+    #print(head(cluster_membership))
+    #print(names(cluster_membership))
+    
+    deg_sent_full <- degree(graph_comm, mode = "out")
+    deg_recv_full <- degree(graph_comm, mode = "in")
+    
+    # Safe degrees
+    deg_sent_all <- degree(graph_comm, mode = "out")
+    deg_recv_all <- degree(graph_comm, mode = "in")
+    
+    # Align degrees to node_ids
+    deg_sent <- deg_sent_all[node_ids]
+    deg_recv <- deg_recv_all[node_ids]
+    
+    # Replace NAs with 0
+    deg_sent[is.na(deg_sent)] <- 0
+    deg_recv[is.na(deg_recv)] <- 0
+    
+    # Cluster group labels
+    cluster_labels <- cluster_membership[node_ids]
+    group_labels <- paste0("Cluster ", cluster_labels)
+    
+    #print(group_labels)
+    #print(cluster_membership)
+    # FOR DEBUGGING
+    #cat("Lengths - node_ids:", length(node_ids), 
+    #    "deg_sent:", length(deg_sent), 
+    #    "deg_recv:", length(deg_recv), 
+    #    "cluster_membership:", length(cluster_membership), "\n")
+    
+    
+    # Create nodes_df safely
+    nodes_df <- tibble(
+      id = node_ids,
+      label = node_ids,
+      title = paste0("🟢 Sent: ", deg_sent, "<br>🔵 Received: ", deg_recv),
+      group = group_labels,
+      value = deg_sent + deg_recv
+    ) %>%
+      left_join(node_types, by = c("id" = "name"))
+    
     selected_clusters <- input$cluster_select
     selected_nodes <- input$node_select
     
-    df <- df %>%
-      filter(!is.na(cluster)) %>%
-      mutate(cluster = paste0("Cluster ", cluster))
-    
-    # Apply cluster filter
-    if (!is.null(selected_clusters) && !"All" %in% selected_clusters) {
-      df <- df %>% filter(cluster %in% selected_clusters)
+    if (!is.null(selected_clusters) && !("All" %in% selected_clusters)) {
+      nodes_df <- nodes_df %>% filter(group %in% selected_clusters)
     }
     
-    # Apply node filter
-    if (!is.null(selected_nodes) && !"All" %in% selected_nodes) {
-      df <- df %>% filter(sender_label %in% selected_nodes)
+    if (!is.null(selected_nodes) && !("All" %in% selected_nodes)) {
+      nodes_df <- nodes_df %>% filter(id %in% selected_nodes)
     }
     
-    df %>%
-      group_by(cluster) %>%
-      summarise(Members = paste(sort(unique(sender_label)), collapse = ", ")) %>%
-      arrange(cluster) %>%
+    # print(nodes_df)
+    
+    nodes_df %>%
+      group_by(Cluster = group) %>%
+      summarise(Members = paste(sort(unique(id)), collapse = ", ")) %>%
+      arrange(Cluster) %>%
       datatable(
         rownames = FALSE,
         options = list(
@@ -416,28 +406,146 @@ server <- function(input, output, session) {
       )
   })
   
+  observe({
+    #cat("DEBUG >>> Running observe()\n")
+    df <- filtered_data()
+    #cat("DEBUG >>> Filtered rows: ", nrow(df), "\n")
+    if (nrow(df) > 0) {
+      #cat("DEBUG >>> Sample content:\n")
+      #print(head(df$content, 3))
+    }
+  })
   
   output$keyword_table <- renderDataTable({
-    req(input$cluster)
-    keywords %>%
-      filter(cluster == input$cluster) %>%
-      arrange(desc(n)) %>%
-      mutate(`No.` = row_number()) %>%
-      select(`No.`, Word = word, Frequency = n) %>%
-      datatable(
-        rownames = FALSE,
-        options = list(
-          pageLength = 10,
-          lengthMenu = list(c(10, 20, 30, 40, 50, 60, 70, 80, 90, 100), c('10','20','30','40','50','60','70','80','90','100')),
-          autoWidth = TRUE,
-          columnDefs = list(
-            list(className = 'dt-center', targets = "_all")
-          )
-        ),
-        class = 'stripe hover compact',
-        escape = FALSE
+    #cat("DEBUG >>> Starting keyword_table render\n")
+    
+    df <- filtered_data()
+    if (nrow(df) == 0) {
+      #cat("DEBUG >>> filtered_data() is empty\n")
+      return(NULL)
+    }
+    
+    # Create edge list
+    edges <- df %>%
+      filter(!is.na(sender_label) & !is.na(receiver_label)) %>%
+      count(sender_label, receiver_label, name = "weight")
+    #cat("DEBUG >>> Number of edges: ", nrow(edges), "\n")
+    if (nrow(edges) == 0) return(NULL)
+    
+    # Create graph
+    g <- igraph::graph_from_data_frame(edges, directed = TRUE)
+    
+    # Ensure sender_label and receiver_label are characters
+    edges <- edges %>%
+      mutate(sender_label = as.character(sender_label),
+             receiver_label = as.character(receiver_label))
+    
+    # Ensure names are correctly set
+    V(g)$name <- V(g)$name  # This should already be correct, but ensure it's set
+    #cat("DEBUG >>> Vertex names:\n")
+    #print(V(g)$name)
+    
+    # Ensure names are correctly set
+    V(g)$name <- V(g)$name  # This should already be correct, but ensure it's set
+    #cat("DEBUG >>> Vertex names:\n")
+    #print(V(g)$name)
+    
+    # Select clustering algorithm
+    algo <- input$clustering_algo_predtopic
+    #cat("DEBUG >>> Selected algo: ", algo, "\n")
+    
+    clusters <- switch(algo,
+                       "Walktrap" = cluster_walktrap(g),
+                       "Louvain" = cluster_louvain(as.undirected(g)),
+                       "Infomap" = cluster_infomap(g),
+                       "Label Propagation" = cluster_label_prop(g),
+                       cluster_walktrap(g)
+    )
+    
+    cluster_membership <- clusters$membership
+    if (is.null(cluster_membership)) {
+      #cat("DEBUG >>> Clustering failed: membership is NULL\n")
+      return(NULL)
+    }
+    
+    #cat("DEBUG >>> Cluster count: ", length(unique(cluster_membership)), "\n")
+    
+    # Group text by sender
+    df_grouped <- df %>%
+      filter(!is.na(content)) %>%
+      group_by(sender_label) %>%
+      summarise(text = paste(content, collapse = " "), .groups = "drop")
+    
+    # Assign cluster membership
+    name_map <- cluster_membership
+    names(name_map) <- V(g)$name
+    
+    df_grouped$cluster <- name_map[df_grouped$sender_label]
+    
+    # Check for NAs here again
+    #cat("DEBUG >>> After mapping cluster membership:\n")
+    #print(df_grouped %>% select(sender_label, cluster))
+    
+    missing <- df_grouped$sender_label[is.na(df_grouped$cluster)]
+    #cat("DEBUG >>> Sender labels missing cluster assignment:\n")
+    #print(missing)
+    
+    # Tokenize and filter
+    keywords <- df_grouped %>%
+      unnest_tokens(word, text) %>%
+      filter(!word %in% stop_words$word) %>%
+      count(cluster, word, sort = TRUE) %>%
+      group_by(cluster) %>%
+      #slice_max(order_by = n, n = 100) %>%
+      ungroup()
+    
+    #print(keywords)
+    
+    #cat("DEBUG >>> Keywords found: ", nrow(keywords), "\n")
+    
+    # Check selected cluster input
+    selected_cluster <- as.numeric(input$cluster)
+    
+    if (is.na(selected_cluster)) {
+      cat("DEBUG >>> No cluster selected\n")
+      return(NULL)
+    }
+    
+    final_df <- keywords %>%
+      filter(cluster == selected_cluster) %>%
+      rename(
+        Cluster = cluster,
+        Word = word,
+        Frequency = n
       )
+    
+    if (nrow(final_df) == 0) {
+      cat("DEBUG >>> No rows for selected cluster\n")
+      return(NULL)
+    }
+    
+    #cat("DEBUG >>> Final table rows: ", nrow(final_df), "\n")
+    if (nrow(final_df) == 0) return(NULL)
+    
+    # Render
+    datatable(
+      final_df,
+      rownames = FALSE,
+      options = list(
+        pageLength = 10,
+        autoWidth = TRUE,
+        columnDefs = list(
+          list(className = 'dt-center', targets = "_all")  # Center-align all columns
+        )
+      ),
+      class = 'stripe hover compact',
+      escape = FALSE
+    )
   })
+  
+  
+  
+  
   
   output$pseudonym_bar <- renderPlot({
     df <- filtered_data()
